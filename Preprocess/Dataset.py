@@ -7,12 +7,6 @@ from tsnecuda import TSNE
 import numpy as np
 from matplotlib.pyplot import plt
 
-# dataset_initialize() build dataset from labelled summaries
-#     sum_dir defines the folder of summaries
-#     sum_list defines the order of summaries
-#
-# dataset_conn_feat() build dataset from connections' features
-
 
 sum_list = [
     '07-04-ftp_patator.json',
@@ -31,8 +25,14 @@ sum_list = [
     '07-07-ddos.json',
 ]
 
-
 def dataset_initialize(sum_dir: str = './Data/Summary/Labelled', sum_list: list = sum_list):
+    """This function create raw data(train.json, valid.json, test.json) from labelled logs
+
+    Args:
+        sum_dir (str, optional): labelled logs' directory. Defaults to './Data/Summary/Labelled'.
+        sum_list (list, optional): logs in sum_list would be selected. Defaults to sum_list.
+    """
+
     raw_dir = './Data/Dataset/raw'
     if not os.path.exists(raw_dir):
         os.makedirs(raw_dir)
@@ -87,9 +87,15 @@ def dataset_initialize(sum_dir: str = './Data/Summary/Labelled', sum_list: list 
     print('-------------------------')
     print('|=>', 'ALL  \t', {label: train_dict[label] + valid_dict[label] + test_dict[label] for label in train_dict})
     print('-------------------------')
+    return
 
 
 def build_commgraph(raw_dir: str = './Data/Dataset/raw'):
+    """This function build communication graph according to raw data
+
+    Args:
+        raw_dir (str, optional): directory which stores raw data. Defaults to './Data/Dataset/raw'.
+    """
     for file in os.listdir(raw_dir):
         # node_dict stores every host's id, graph stores the comm_graph, host_dict stores host's stat info
         node_dict, comm_graph, host_list = dict(), nx.DiGraph(), list()

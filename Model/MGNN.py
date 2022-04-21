@@ -124,16 +124,17 @@ def evaluate(model: torch.nn.Module, valid_graph: dgl.DGLGraph, has_confusion_ma
 
 if __name__ == '__main__':
     sys.path.append('./')
-    from Preprocess.Dataset import build_relation_graph
+    import Preprocess.Dataset as dataset
 
-    train_graph = build_relation_graph('./Data/Dataset/raw/train.json')
-    valid_graph = build_relation_graph('./Data/Dataset/raw/valid.json')
-    test_graph = build_relation_graph('./Data/Dataset/raw/test.json')
+    dataset.dataset_initialize(total_scale=0.1)
+    train_graph = dataset.build_relation_graph('./Data/Dataset/raw/train.json')
+    valid_graph = dataset.build_relation_graph('./Data/Dataset/raw/valid.json')
+    test_graph = dataset.build_relation_graph('./Data/Dataset/raw/test.json')
 
     model = Model(7, 11, train_graph.etypes)
     model = model.cuda()
 
-    train(model, train_graph, valid_graph, 10000)
+    train(model, train_graph, valid_graph, 100)
 
     _, _, conf_mat = evaluate(model, test_graph, has_confusion_matrix=True)
     print(conf_mat)

@@ -1,6 +1,8 @@
+import csv
 import time
 import dgl
 import dgl.nn.pytorch as dglnn
+import numpy as np
 import torch
 import torch.nn.functional as F
 from sklearn.metrics import confusion_matrix
@@ -63,6 +65,7 @@ def train(model: torch.nn.Module, train_graph: dgl.DGLGraph, valid_graph: dgl.DG
     print('\r________________________\nStart training...')
     opt = torch.optim.Adam(model.parameters())
     x_list, train_acc_list, train_loss_list, valid_acc_list, valid_loss_list = [], [], [], [], []
+    stat_list = []
 
     for epoch in range(epochs):
         model.train()
@@ -81,29 +84,27 @@ def train(model: torch.nn.Module, train_graph: dgl.DGLGraph, valid_graph: dgl.DG
         train_acc = correct.item() * 1.0 / len(labels)
         valid_acc, valid_loss = evaluate(model, valid_graph)
 
-        x_list.append(epoch + 1)
-
-        train_acc_list.append(train_acc)
-        train_loss_list.append(train_loss.item())
-        valid_acc_list.append(valid_acc)
-        valid_loss_list.append(valid_loss)
+        stat_list.append([epoch + 1, train_acc, train_loss.item(), valid_acc, valid_loss])
 
         torch.cuda.synchronize()
         end = time.time()
         print('\r=> Epoch {}\ttrain_acc: {:.4f}\ttrain_loss: {:.4f}\tvalid_acc: {:.4f}\tvalid_loss: {:.4f}\ttime: {:.4f}s'.format(epoch + 1, train_acc, train_loss.item(), valid_acc, valid_loss, end - start))
+    with open('train_test.csv', 'w', newline='') as fp:
+        csv.writer(fp).writerows(stat_list)
+    stat_list = np.array(stat_list)
     fig = plt.figure()
     plt.subplot(2, 2, 1)
     plt.title('train_acc')
-    plt.plot(x_list, train_acc_list)
+    plt.plot(stat_list[:, 0], stat_list[:, 1])
     plt.subplot(2, 2, 2)
     plt.title('train_loss')
-    plt.plot(x_list, train_loss_list)
+    plt.plot(stat_list[:, 0], stat_list[:, 2])
     plt.subplot(2, 2, 3)
     plt.title('valid_acc')
-    plt.plot(x_list, valid_acc_list)
+    plt.plot(stat_list[:, 0], stat_list[:, 3])
     plt.subplot(2, 2, 4)
     plt.title('valid_loss')
-    plt.plot(x_list, valid_loss_list)
+    plt.plot(stat_list[:, 0], stat_list[:, 4])
     plt.show()
     fig.savefig('train_test.svg')
 

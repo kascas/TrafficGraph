@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from sklearn.metrics import confusion_matrix
 import matplotlib.pyplot as plt
 import sys
+import seaborn
 
 
 class MSAGE(torch.nn.Module):
@@ -47,50 +48,65 @@ class MSAGE(torch.nn.Module):
 
 
 class Model(torch.nn.Module):
-    def __init__(self, in_feats, out_feats, rels) -> None:
+    def __init__(self, rels) -> None:
         super().__init__()
-        self.layer1 = MSAGE(in_feats, 12, rels)
-        self.layer2 = MSAGE(12, 16, rels)
-        self.layer3 = MSAGE(16, 20, rels)
-        self.linear = torch.nn.Linear(20, out_feats, bias=True)
+        # Embedding layers transform indexes into embedding vectors
+        self.emb_layers = torch.nn.ModuleList([torch.nn.Embedding(14, 6), torch.nn.Embedding(5, 2), torch.nn.Embedding(10, 4)])
+        # MGNN layers aggregate neighborhood information
+        self.layer1 = MSAGE(44, 64, rels)
+        self.layer2 = MSAGE(64, 80, rels)
+        self.layer3 = MSAGE(80, 96, rels)
+        # Linear layer transforms the representation into a vector with fixed dimension
+        self.linear = torch.nn.Linear(96, 11, bias=True)
 
     def forward(self, graph, inputs):
-        h = self.layer1(graph, inputs)
+        # Embedding layers
+        conn_state_emb = self.emb_layers[0](inputs['conn'][:, 0].type(torch.int))
+        proto_emb = self.emb_layers[1](inputs['conn'][:, 1].type(torch.int))
+        service_emb = self.emb_layers[2](inputs['conn'][:, 2].type(torch.int))
+        # h is the actual input of MGNN layer
+        h = {'conn': torch.cat([conn_state_emb, proto_emb, service_emb, inputs['conn'][:, 3:]], dim=1)}
+        # MGNN layers
+        h = self.layer1(graph, h)
         h = self.layer2(graph, h)
         h = self.layer3(graph, h)
+        # Linear layers
         return {k: self.linear(v) for k, v in h.items()}
 
 
 def train(model: torch.nn.Module, train_graph: dgl.DGLGraph, valid_graph: dgl.DGLGraph, epochs: int):
     print('\r________________________\nStart training...')
-    opt = torch.optim.Adam(model.parameters())
-    x_list, train_acc_list, train_loss_list, valid_acc_list, valid_loss_list = [], [], [], [], []
+    # optimizer of training
+    opt = torch.optim.Adam(model.parameters(), lr=0.0005)
     stat_list = []
-
+    # start training
     for epoch in range(epochs):
         model.train()
         torch.cuda.synchronize()
         start = time.time()
-
+        # backward propagation
         logits = model(train_graph, {'conn': train_graph.nodes['conn'].data['feat']})['conn']
         train_loss = F.cross_entropy(logits, train_graph.nodes['conn'].data['label'])
         opt.zero_grad()
         train_loss.backward()
         opt.step()
-
+        # train_acc and train_loss
         labels = train_graph.nodes['conn'].data['label']
         _, indices = torch.max(logits, dim=1)
         correct = torch.sum(indices == labels)
         train_acc = correct.item() * 1.0 / len(labels)
+        # valid_acc and valid_loss
         valid_acc, valid_loss = evaluate(model, valid_graph)
-
+        # add train_acc, train_loss, valid_acc and valid_loss to stat_list
         stat_list.append([epoch + 1, train_acc, train_loss.item(), valid_acc, valid_loss])
 
         torch.cuda.synchronize()
         end = time.time()
         print('\r=> Epoch {}\ttrain_acc: {:.4f}\ttrain_loss: {:.4f}\tvalid_acc: {:.4f}\tvalid_loss: {:.4f}\ttime: {:.4f}s'.format(epoch + 1, train_acc, train_loss.item(), valid_acc, valid_loss, end - start))
+    # save the acc and loss of training and validation
     with open('train_test.csv', 'w', newline='') as fp:
         csv.writer(fp).writerows(stat_list)
+    # draw acc-loss curve
     stat_list = np.array(stat_list)
     fig = plt.figure()
     plt.subplot(2, 2, 1)
@@ -105,8 +121,7 @@ def train(model: torch.nn.Module, train_graph: dgl.DGLGraph, valid_graph: dgl.DG
     plt.subplot(2, 2, 4)
     plt.title('valid_loss')
     plt.plot(stat_list[:, 0], stat_list[:, 4])
-    plt.show()
-    fig.savefig('train_test.svg')
+    fig.savefig('train_test.svg', bbox_inches='tight', dpi=100)
 
 
 def evaluate(model: torch.nn.Module, valid_graph: dgl.DGLGraph, has_confusion_matrix=False):
@@ -117,8 +132,16 @@ def evaluate(model: torch.nn.Module, valid_graph: dgl.DGLGraph, has_confusion_ma
         labels = valid_graph.nodes['conn'].data['label']
         _, indices = torch.max(logits, dim=1)
         correct = torch.sum(indices == labels)
+        # If testing, return a confusion matrix extra
         if has_confusion_matrix:
-            return correct.item() * 1.0 / len(labels), loss.item(), confusion_matrix(labels.cpu(), indices.cpu())
+            mat = confusion_matrix(labels.cpu(), indices.cpu())
+            mat = mat / mat.sum(axis=1).reshape(-1, 1)
+            # save cf_mat's csv and svg
+            np.savetxt('confusion_matrix.csv', mat, delimiter='\t', fmt='%.2f')
+            fig = plt.figure()
+            seaborn.heatmap(mat, cmap='Blues', annot=True, fmt='.2f')
+            fig.savefig('confusion_matrix.svg', bbox_inches='tight', dpi=100)
+            return correct.item() * 1.0 / len(labels), loss.item(), mat
         else:
             return correct.item() * 1.0 / len(labels), loss.item()
 
@@ -127,15 +150,15 @@ if __name__ == '__main__':
     sys.path.append('./')
     import Preprocess.Dataset as dataset
 
-    dataset.dataset_initialize(total_scale=0.1)
+    # dataset.dataset_initialize(total_scale=0.1)
     train_graph = dataset.build_relation_graph('./Data/Dataset/raw/train.json')
     valid_graph = dataset.build_relation_graph('./Data/Dataset/raw/valid.json')
     test_graph = dataset.build_relation_graph('./Data/Dataset/raw/test.json')
 
-    model = Model(7, 11, train_graph.etypes)
+    model = Model(train_graph.etypes)
     model = model.cuda()
 
-    train(model, train_graph, valid_graph, 100)
+    train(model, train_graph, valid_graph, 1000)
 
     _, _, conf_mat = evaluate(model, test_graph, has_confusion_matrix=True)
     print(conf_mat)

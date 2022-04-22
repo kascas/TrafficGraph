@@ -31,6 +31,31 @@ def check_host(conn: dict, ip1: str, ip2: str, port2: int = -1):
         (ip1 in conn['id.resp_h'] and ip2 in conn['id.orig_h'] and (True if port2 == -1 else conn['id.orig_p'] == port2))
 
 
+def get_key_index(k: str, d: dict):
+    return d[k] if k in d else len(d)
+
+
+def get_item_count(s: str, l: list):
+    result = []
+    for c in l:
+        result.append(s.count(c))
+    return result
+
+
+conn_state_dict = {'S0': 0, 'S1': 1, 'SF': 2, 'REJ': 3, 'S2': 4, 'S3': 5, 'RSTO': 6, 'RSTR': 7, 'RSTOS0': 8, 'RSTRH': 9, 'SH': 10, 'SHR': 11, 'OTH': 12, }
+proto_dict = {'tcp': 0, 'udp': 1, 'icmp': 2, 'unknown_transport': 3, }
+service_dict = {'dns': 0, 'ftp': 1, 'http': 2, 'irc': 3, 'kerberos': 4, 'smtp': 5, 'ssh': 6, 'ssl': 7, 'dce_rpc': 8, }
+history_char_list = ['s', 'S', 'h', 'H', 'a', 'A', 'd', 'D', 'f', 'F', 'r', 'R', 'c', 'C', 'g', 'G', 't', 'T', 'w', 'W', 'i', 'I', 'q', 'Q', '^', ]
+
+
+def field_encode(item: dict):
+    item['conn']['conn_state'] = get_key_index(item['conn']['conn_state'], conn_state_dict)
+    item['conn']['proto'] = get_key_index(item['conn']['proto'], proto_dict)
+    item['conn']['service'] = get_key_index(item['conn']['service'], service_dict)
+    item['conn']['history'] = get_item_count(item['conn']['history'], history_char_list)
+    return
+
+
 def cicids_2017_label(path='./Data/Summary'):
     files = os.listdir(path)
     if not os.path.exists(os.path.join(path, 'Labelled')):
@@ -116,6 +141,7 @@ def cicids_2017_label(path='./Data/Summary'):
             #     pass
             else:
                 item['label'] = 0 if label_type == 'int' else 'benign'
+            field_encode(item)
             fout.write(json.dumps(item) + '\n')
         fin.close()
         fout.close()

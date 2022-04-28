@@ -5,12 +5,12 @@ import dgl.nn.pytorch as dglnn
 import numpy as np
 import torch
 import torch.nn.functional as F
-from sklearn.metrics import confusion_matrix
+from sklearn.metrics import confusion_matrix, classification_report
 import matplotlib.pyplot as plt
 import sys
 import seaborn
 
-
+'''
 class MSAGE(torch.nn.Module):
     def __init__(self, in_feats: int, out_feats: int, rels: list) -> None:
         super().__init__()
@@ -22,7 +22,7 @@ class MSAGE(torch.nn.Module):
         # gnn_layer use GraphSAGE-LSTM to aggregate information within one dimension, then use attention to aggregate information across dimensions
         self.gnn_layer = dglnn.HeteroGraphConv({
             rel: dglnn.SAGEConv(in_feats, out_feats, aggregator_type='lstm', activation=F.leaky_relu)for rel in rels
-        }, aggregate=self.attention)
+        }, aggregate='mean')
         self.init_params()
 
     def forward(self, graph: dgl.DGLGraph, inputs: dict):
@@ -45,19 +45,31 @@ class MSAGE(torch.nn.Module):
     def init_params(self):
         torch.nn.init.xavier_uniform_(self.trans)
         return
+'''
 
 
 class Model(torch.nn.Module):
-    def __init__(self, rels) -> None:
+    def __init__(self, rels, num_class) -> None:
         super().__init__()
         # Embedding layers transform indexes into embedding vectors
         self.emb_layers = torch.nn.ModuleList([torch.nn.Embedding(14, 6), torch.nn.Embedding(5, 2), torch.nn.Embedding(10, 4)])
-        # MGNN layers aggregate neighborhood information
-        self.layer1 = MSAGE(44, 64, rels)
-        self.layer2 = MSAGE(64, 80, rels)
-        self.layer3 = MSAGE(80, 96, rels)
+        # MGNN layers aggregate neighborhood information (DEPRECATED)
+        # self.layer1 = MSAGE(46, 64, rels)
+        # self.layer2 = MSAGE(64, 80, rels)
+        # self.layer3 = MSAGE(80, 96, rels)
+        # use normal HeteroGraphConv to aggregate neighborhood information
+        self.layer1 = dglnn.HeteroGraphConv({
+            rel: dglnn.SAGEConv(46, 64, aggregator_type='lstm', activation=F.leaky_relu)for rel in rels
+        }, aggregate='mean')
+        self.layer2 = dglnn.HeteroGraphConv({
+            rel: dglnn.SAGEConv(64, 80, aggregator_type='lstm', activation=F.leaky_relu)for rel in rels
+        }, aggregate='mean')
+        self.layer3 = dglnn.HeteroGraphConv({
+            rel: dglnn.SAGEConv(80, 96, aggregator_type='lstm', activation=F.leaky_relu)for rel in rels
+        }, aggregate='mean')
         # Linear layer transforms the representation into a vector with fixed dimension
-        self.linear = torch.nn.Linear(96, 11, bias=True)
+        self.linear1 = torch.nn.Linear(96, 72, bias=True)
+        self.linear2 = torch.nn.Linear(72, num_class, bias=True)
 
     def forward(self, graph, inputs):
         # Embedding layers
@@ -71,14 +83,18 @@ class Model(torch.nn.Module):
         h = self.layer2(graph, h)
         h = self.layer3(graph, h)
         # Linear layers
-        return {k: self.linear(v) for k, v in h.items()}
+        h = {k: self.linear1(v) for k, v in h.items()}
+        h = {k: F.leaky_relu(v) for k, v in h.items()}
+        h = {k: self.linear2(v) for k, v in h.items()}
+        return h
 
 
-def train(model: torch.nn.Module, train_graph: dgl.DGLGraph, valid_graph: dgl.DGLGraph, epochs: int):
+def train(model: torch.nn.Module, train_graph: dgl.DGLGraph, valid_graph: dgl.DGLGraph, epochs: int, stop_acc: float = -1):
     print('\r________________________\nStart training...')
     # optimizer of training
-    opt = torch.optim.Adam(model.parameters(), lr=0.0005)
+    opt = torch.optim.Adam(model.parameters(), lr=0.0004)
     stat_list = []
+    fp = open('train_test.txt', 'w')
     # start training
     for epoch in range(epochs):
         model.train()
@@ -102,7 +118,15 @@ def train(model: torch.nn.Module, train_graph: dgl.DGLGraph, valid_graph: dgl.DG
 
         torch.cuda.synchronize()
         end = time.time()
-        print('\r=> Epoch {}\ttrain_acc: {:.4f}\ttrain_loss: {:.4f}\tvalid_acc: {:.4f}\tvalid_loss: {:.4f}\ttime: {:.4f}s'.format(epoch + 1, train_acc, train_loss.item(), valid_acc, valid_loss, end - start))
+
+        record = '\r=> Epoch {}\ttrain_acc: {:.4f}\ttrain_loss: {:.4f}\tvalid_acc: {:.4f}\tvalid_loss: {:.4f}\ttime: {:.4f}s'.format(epoch + 1, train_acc, train_loss.item(), valid_acc, valid_loss, end - start)
+        print(record)
+        fp.write(record + '\n')
+
+        if stop_acc != -1 and stop_acc <= valid_acc:
+            torch.save(model, 'model.bin')
+            break
+    fp.close()
     # save the acc and loss of training and validation
     with open('train_test.csv', 'w', newline='') as fp:
         csv.writer(fp).writerows(stat_list)
@@ -124,7 +148,7 @@ def train(model: torch.nn.Module, train_graph: dgl.DGLGraph, valid_graph: dgl.DG
     fig.savefig('train_test.svg', bbox_inches='tight', dpi=100)
 
 
-def evaluate(model: torch.nn.Module, valid_graph: dgl.DGLGraph, has_confusion_matrix=False):
+def evaluate(model: torch.nn.Module, valid_graph: dgl.DGLGraph, is_test=False):
     model.eval()
     with torch.no_grad():
         logits = model(valid_graph, {'conn': valid_graph.nodes['conn'].data['feat']})['conn']
@@ -133,32 +157,18 @@ def evaluate(model: torch.nn.Module, valid_graph: dgl.DGLGraph, has_confusion_ma
         _, indices = torch.max(logits, dim=1)
         correct = torch.sum(indices == labels)
         # If testing, return a confusion matrix extra
-        if has_confusion_matrix:
-            mat = confusion_matrix(labels.cpu(), indices.cpu())
-            mat = mat / mat.sum(axis=1).reshape(-1, 1)
+        if is_test:
+            labels, indices = labels.cpu(), indices.cpu()
+            mat = confusion_matrix(labels, indices)
             # save cf_mat's csv and svg
-            np.savetxt('confusion_matrix.csv', mat, delimiter='\t', fmt='%.2f')
+            np.savetxt('confusion_matrix.csv', mat, delimiter='\t', fmt='%.4f')
+            mat = mat / mat.sum(axis=1).reshape(-1, 1)
             fig = plt.figure()
             seaborn.heatmap(mat, cmap='Blues', annot=True, fmt='.2f')
             fig.savefig('confusion_matrix.svg', bbox_inches='tight', dpi=100)
+            # create report
+            with open('report.txt', 'w')as fp:
+                fp.write(classification_report(labels, indices, digits=6))
             return correct.item() * 1.0 / len(labels), loss.item(), mat
         else:
             return correct.item() * 1.0 / len(labels), loss.item()
-
-
-if __name__ == '__main__':
-    sys.path.append('./')
-    import Preprocess.Dataset as dataset
-
-    # dataset.dataset_initialize(total_scale=0.1)
-    train_graph = dataset.build_relation_graph('./Data/Dataset/raw/train.json')
-    valid_graph = dataset.build_relation_graph('./Data/Dataset/raw/valid.json')
-    test_graph = dataset.build_relation_graph('./Data/Dataset/raw/test.json')
-
-    model = Model(train_graph.etypes)
-    model = model.cuda()
-
-    train(model, train_graph, valid_graph, 1000)
-
-    _, _, conf_mat = evaluate(model, test_graph, has_confusion_matrix=True)
-    print(conf_mat)

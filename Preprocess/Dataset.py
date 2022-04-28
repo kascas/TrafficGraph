@@ -29,13 +29,6 @@ sum_list = [
 
 
 def dataset_initialize(sum_dir: str = './Data/Summary/Labelled', sum_list: list = sum_list, train_scale:int = 0.6, valid_scale:int = 0.2, total_scale:int = 1):
-    """This function create raw data(train.json, valid.json, test.json) from labelled logs
-
-    Args:
-        sum_dir (str, optional): labelled logs' directory. Defaults to './Data/Summary/Labelled'.
-        sum_list (list, optional): logs in sum_list would be selected. Defaults to sum_list.
-    """
-
     raw_dir = './Data/Dataset/raw'
     if not os.path.exists(raw_dir):
         os.makedirs(raw_dir)
@@ -57,19 +50,19 @@ def dataset_initialize(sum_dir: str = './Data/Summary/Labelled', sum_list: list 
                 item = json.loads(line)
                 rand = random.random()
                 if rand <= train_scale:
-                    f_train.write(json.dumps(item) + '\n')
+                    f_train.write(line)
                     if item['label'] not in train_dict:
                         train_dict[item['label']] = 0
                     train_dict[item['label']] += 1
                     train_total += 1
                 elif rand <= train_scale + valid_scale:
-                    f_valid.write(json.dumps(item) + '\n')
+                    f_valid.write(line)
                     if item['label'] not in valid_dict:
                         valid_dict[item['label']] = 0
                     valid_dict[item['label']] += 1
                     valid_total += 1
                 elif rand<=train_scale + valid_scale+test_scale:
-                    f_test.write(json.dumps(item) + '\n')
+                    f_test.write(line)
                     if item['label'] not in test_dict:
                         test_dict[item['label']] = 0
                     test_dict[item['label']] += 1
@@ -92,13 +85,34 @@ def dataset_initialize(sum_dir: str = './Data/Summary/Labelled', sum_list: list 
     print('-------------------------')
     return
 
+cicids2017={
+    0: 0.04, 3: 0.1, 6: 0.08, 7: 0.1
+}
+
+def dataset_adjust(class_scale:dict=cicids2017):
+    files=['./Data/Dataset/raw/train.json','./Data/Dataset/raw/valid.json','./Data/Dataset/raw/test.json']
+    temp='./Data/Dataset/raw/temp.json'
+
+    for file in files:
+        stat_dict, total=dict(),0
+        fin,fout=open(file,'r'),open(temp,'w')
+        for line in fin:
+            rand=random.random()
+            label=json.loads(line)['label']
+            if label not in class_scale or rand < class_scale[label]:
+                fout.write(line)
+                if label not in stat_dict:
+                    stat_dict[label]=0
+                stat_dict[label]+=1
+                total+=1
+        print('|=>', file+'\t', stat_dict, 'total:', total)
+        fin.close()
+        fout.close()
+        os.remove(file)
+        os.rename(temp,file)
+
 
 def build_commgraph(raw_dir: str = './Data/Dataset/raw'):
-    """This function build communication graph according to raw data
-
-    Args:
-        raw_dir (str, optional): directory which stores raw data. Defaults to './Data/Dataset/raw'.
-    """
     for file in os.listdir(raw_dir):
         # node_dict stores every host's id, graph stores the comm_graph, host_dict stores host's stat info
         node_dict, comm_graph, host_list = dict(), nx.DiGraph(), list()
@@ -176,38 +190,69 @@ def build_commgraph(raw_dir: str = './Data/Dataset/raw'):
     return
 
 
-default_rels = {
-    'host': ['id.orig_h', 'id.resp_h'],
-    'http': {'status_code': 404}
-}
-
-
-def build_relation_graph(raw_data:str, rel_dict:dict = default_rels):
-    """This function generate relation graph according to given relations
-
-    Args:
-        raw_data (str): raw data file, e.g. train.json
-        rels (dict): key is log's name, value is a list or a dict contains field and corresponding value
-    """
-    fp = open(raw_data,'r')
+def build_relation_graph(raw_data:str):
+    fp = open(raw_data, 'r')
     rel_latest, rel_edges, count = dict(), dict(), 0
-    rel_edges['host'] = ([], [])
     conn_feat, conn_label = list(), list()
+
+    for rel in ['conn_sd', 'conn_s', 'conn_d', 'ftp_login', 'ssh_login', 'http_login']:
+        rel_latest[rel] = dict()
+        rel_edges[rel] = ([], [])
 
     for line in fp:
         item = json.loads(line)
         conn = item['conn']
         sip, dip = conn['id.orig_h'], conn['id.resp_h']
-
-        if sip in rel_latest and isinstance(rel_latest[sip],dict) and dip in rel_latest[sip]:
-            rel_edges['host'][0].append(rel_latest[sip][dip])
-            rel_edges['host'][1].append(count)
-            rel_edges['host'][1].append(rel_latest[sip][dip])
-            rel_edges['host'][0].append(count)
+        # 'conn_sd' relation
+        if sip in rel_latest['conn_sd'] and isinstance(rel_latest['conn_sd'][sip],dict) and dip in rel_latest['conn_sd'][sip]:
+            rel_edges['conn_sd'][0].append(rel_latest['conn_sd'][sip][dip])
+            rel_edges['conn_sd'][1].append(count)
+            rel_edges['conn_sd'][1].append(rel_latest['conn_sd'][sip][dip])
+            rel_edges['conn_sd'][0].append(count)
         else:
-            rel_latest[sip] = dict()
-        rel_latest[sip][dip] = count
-
+            rel_latest['conn_sd'][sip] = dict()
+        rel_latest['conn_sd'][sip][dip] = count
+        # 'conn_s' relation
+        if sip in rel_latest['conn_s']:
+            rel_edges['conn_s'][0].append(rel_latest['conn_s'][sip])
+            rel_edges['conn_s'][1].append(count)
+            rel_edges['conn_s'][1].append(rel_latest['conn_s'][sip])
+            rel_edges['conn_s'][0].append(count)
+        rel_latest['conn_s'][sip]=count
+        # 'conn_d' relation
+        if dip in rel_latest['conn_d']:
+            rel_edges['conn_d'][0].append(rel_latest['conn_d'][dip])
+            rel_edges['conn_d'][1].append(count)
+            rel_edges['conn_d'][1].append(rel_latest['conn_d'][dip])
+            rel_edges['conn_d'][0].append(count)
+        rel_latest['conn_d'][dip]=count
+        # 'ftp_login' relation
+        if dip in rel_latest['ftp_login'] and conn['service']==1 and 'ftp' not in item:
+            rel_edges['ftp_login'][0].append(rel_latest['ftp_login'][dip])
+            rel_edges['ftp_login'][1].append(count)
+            rel_edges['ftp_login'][1].append(rel_latest['ftp_login'][dip])
+            rel_edges['ftp_login'][0].append(count)
+        rel_latest['ftp_login'][dip]=count
+        # 'ssh_login' relation
+        if dip in rel_latest['ssh_login'] and conn['service']==6 and 'ssh' in item and item['ssh']['auth_success']==False:
+            rel_edges['ssh_login'][0].append(rel_latest['ssh_login'][dip])
+            rel_edges['ssh_login'][1].append(count)
+            rel_edges['ssh_login'][1].append(rel_latest['ssh_login'][dip])
+            rel_edges['ssh_login'][0].append(count)
+        rel_latest['ssh_login'][dip]=count
+        # 'http_login' relation
+        def check_login(domain,url):
+            word_list=['passport','login','signin']
+            for word in word_list:
+                if word in domain or word in url:
+                    return True
+        if dip in rel_latest['http_login'] and conn['service']==2 and 'http' in item and check_login(item['http']['host'],item['http']['uri']):
+            rel_edges['http_login'][0].append(rel_latest['http_login'][dip])
+            rel_edges['http_login'][1].append(count)
+            rel_edges['http_login'][1].append(rel_latest['http_login'][dip])
+            rel_edges['http_login'][0].append(count)
+        rel_latest['http_login'][dip]=count
+        # store features and labels
         conn_feat.append(get_conn_feat(conn))
         conn_label.append(item['label'])
         count += 1
@@ -223,7 +268,8 @@ def get_conn_feat(conn:dict):
     orig_ip_bytes, resp_ip_bytes = conn['orig_ip_bytes'], conn['resp_ip_bytes']
     orig_pkts, resp_pkts = conn['orig_pkts'], conn['resp_pkts']
     conn_state, history, proto, service = conn['conn_state'], conn['history'], conn['proto'], conn['service']
-    return [conn_state, proto, service, *history, duration, orig_bytes, resp_bytes, orig_ip_bytes, resp_ip_bytes, orig_pkts, resp_pkts]
+    orig_pkt_interval, resp_pkt_interval = orig_pkts / duration if duration != 0 else 0, resp_pkts / duration if duration != 0 else 0
+    return [conn_state, proto, service, *history, duration, orig_bytes, resp_bytes, orig_ip_bytes, resp_ip_bytes, orig_pkts, resp_pkts, orig_pkt_interval, resp_pkt_interval]
 
 def tsne_visual(X: np.ndarray):
     emb = TSNE().fit_transform(X)
@@ -236,10 +282,4 @@ def tsne_visual(X: np.ndarray):
 
 def tsne(X: np.ndarray):
     return TSNE().fit_transform(X)
-
-
-if __name__ == '__main__':
-    dataset_initialize(total_scale=0.1)
-    # build_commgraph()
-    # build_relation_graph('./Data/Dataset/raw/test.json')
  

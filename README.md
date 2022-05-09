@@ -2,11 +2,12 @@
 
 ## Requirement
 
-- PyTorch
-- DGL
-- seaborn
-- networkx
-- scikit-learn
+- [PyTorch](https://github.com/pytorch/pytorch)
+- [DGL](https://github.com/dmlc/dgl)
+- [seaborn](https://github.com/mwaskom/seaborn)
+- [networkx](https://github.com/networkx/networkx)
+- [scikit-learn](https://github.com/scikit-learn/scikit-learn)
+- [tsne-cuda](https://github.com/CannyLab/tsne-cuda)
 
 ## Overview
 

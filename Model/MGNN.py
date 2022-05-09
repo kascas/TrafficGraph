@@ -1,4 +1,6 @@
 import csv
+import os
+import shutil
 import time
 import dgl
 import dgl.nn.pytorch as dglnn
@@ -7,8 +9,9 @@ import torch
 import torch.nn.functional as F
 from sklearn.metrics import confusion_matrix, classification_report
 import matplotlib.pyplot as plt
-import sys
 import seaborn
+from tsnecuda import TSNE
+
 
 '''
 class MSAGE(torch.nn.Module):
@@ -48,30 +51,25 @@ class MSAGE(torch.nn.Module):
 '''
 
 
-class Model(torch.nn.Module):
+class M_SAGE(torch.nn.Module):
     def __init__(self, rels, num_class) -> None:
         super().__init__()
         # Embedding layers transform indexes into embedding vectors
-        self.emb_layers = torch.nn.ModuleList([torch.nn.Embedding(14, 6), torch.nn.Embedding(5, 2), torch.nn.Embedding(10, 4)])
-        # MGNN layers aggregate neighborhood information (DEPRECATED)
-        # self.layer1 = MSAGE(46, 64, rels)
-        # self.layer2 = MSAGE(64, 80, rels)
-        # self.layer3 = MSAGE(80, 96, rels)
+        self.emb_layers = torch.nn.ModuleList([torch.nn.Embedding(14, 8), torch.nn.Embedding(5, 3), torch.nn.Embedding(10, 6)])
         # use normal HeteroGraphConv to aggregate neighborhood information
         self.layer1 = dglnn.HeteroGraphConv({
-            rel: dglnn.SAGEConv(46, 64, aggregator_type='lstm', activation=F.leaky_relu)for rel in rels
+            rel: dglnn.SAGEConv(51, 64, aggregator_type='lstm', activation=F.leaky_relu)for rel in rels
         }, aggregate='mean')
         self.layer2 = dglnn.HeteroGraphConv({
-            rel: dglnn.SAGEConv(64, 80, aggregator_type='lstm', activation=F.leaky_relu)for rel in rels
+            rel: dglnn.SAGEConv(64, 64, aggregator_type='lstm', activation=F.leaky_relu)for rel in rels
         }, aggregate='mean')
         self.layer3 = dglnn.HeteroGraphConv({
-            rel: dglnn.SAGEConv(80, 96, aggregator_type='lstm', activation=F.leaky_relu)for rel in rels
+            rel: dglnn.SAGEConv(64, 64, aggregator_type='lstm', activation=F.leaky_relu)for rel in rels
         }, aggregate='mean')
         # Linear layer transforms the representation into a vector with fixed dimension
-        self.linear1 = torch.nn.Linear(96, 72, bias=True)
-        self.linear2 = torch.nn.Linear(72, num_class, bias=True)
+        self.output = torch.nn.Linear(64, num_class, bias=True)
 
-    def forward(self, graph, inputs):
+    def forward(self, graph, inputs, hidden_only=False):
         # Embedding layers
         conn_state_emb = self.emb_layers[0](inputs['conn'][:, 0].type(torch.int))
         proto_emb = self.emb_layers[1](inputs['conn'][:, 1].type(torch.int))
@@ -82,19 +80,67 @@ class Model(torch.nn.Module):
         h = self.layer1(graph, h)
         h = self.layer2(graph, h)
         h = self.layer3(graph, h)
+        # If only hidden layers needed, return h
+        if hidden_only:
+            return h
         # Linear layers
-        h = {k: self.linear1(v) for k, v in h.items()}
-        h = {k: F.leaky_relu(v) for k, v in h.items()}
-        h = {k: self.linear2(v) for k, v in h.items()}
+        h = {k: self.output(v) for k, v in h.items()}
         return h
 
 
-def train(model: torch.nn.Module, train_graph: dgl.DGLGraph, valid_graph: dgl.DGLGraph, epochs: int, stop_acc: float = -1):
+class M_GAT(torch.nn.Module):
+    def __init__(self, rels, num_class, num_heads=2) -> None:
+        super().__init__()
+        # Embedding layers transform indexes into embedding vectors
+        self.emb_layers = torch.nn.ModuleList([torch.nn.Embedding(14, 8), torch.nn.Embedding(5, 3), torch.nn.Embedding(10, 6)])
+        # use normal HeteroGraphConv to aggregate neighborhood information
+        self.layer1 = dglnn.HeteroGraphConv({
+            rel: dglnn.GATConv(51, 64, num_heads=num_heads, activation=F.leaky_relu, residual=True)for rel in rels
+        }, aggregate='mean')
+        self.linear1 = torch.nn.Linear(64 * num_heads, 64)
+        self.layer2 = dglnn.HeteroGraphConv({
+            rel: dglnn.GATConv(64, 64, num_heads=num_heads, activation=F.leaky_relu, residual=True)for rel in rels
+        }, aggregate='mean')
+        self.linear2 = torch.nn.Linear(64 * num_heads, 64)
+        self.layer3 = dglnn.HeteroGraphConv({
+            rel: dglnn.GATConv(64, 64, num_heads=num_heads, activation=F.leaky_relu, residual=True)for rel in rels
+        }, aggregate='mean')
+        self.linear3 = torch.nn.Linear(64 * num_heads, 64)
+        # Linear layer transforms the representation into a vector with fixed dimension
+        self.output = torch.nn.Linear(64, num_class)
+
+    def forward(self, graph, inputs, hidden_only=False):
+        # Embedding layers
+        conn_state_emb = self.emb_layers[0](inputs['conn'][:, 0].type(torch.int))
+        proto_emb = self.emb_layers[1](inputs['conn'][:, 1].type(torch.int))
+        service_emb = self.emb_layers[2](inputs['conn'][:, 2].type(torch.int))
+        # h is the actual input of MGNN layer
+        h = {'conn': torch.cat([conn_state_emb, proto_emb, service_emb, inputs['conn'][:, 3:]], dim=1)}
+        # MGNN layers
+        h = self.layer1(graph, h)
+        h = {'conn': self.linear1(h['conn'].reshape(h['conn'].shape[0], -1))}
+        h = self.layer2(graph, h)
+        h = {'conn': self.linear2(h['conn'].reshape(h['conn'].shape[0], -1))}
+        h = self.layer3(graph, h)
+        h = {'conn': self.linear3(h['conn'].reshape(h['conn'].shape[0], -1))}
+        # If only hidden layers needed, return h
+        if hidden_only:
+            return h
+        # Linear layers
+        h = {k: self.output(v) for k, v in h.items()}
+        return h
+
+
+def train(model: torch.nn.Module, train_graph: dgl.DGLGraph, valid_graph: dgl.DGLGraph, test_graph: dgl.DGLGraph, epochs: int, stop_acc: float = -1, lr=0.001):
     print('\r________________________\nStart training...')
     # optimizer of training
-    opt = torch.optim.Adam(model.parameters(), lr=0.0004)
+    opt = torch.optim.Adam(model.parameters(), lr=lr)
     stat_list = []
-    fp = open('train_test.txt', 'w')
+    if not os.path.exists('./saved_model'):
+        os.makedirs('./saved_model')
+    else:
+        shutil.rmtree('./saved_model')
+        os.makedirs('./saved_model')
     # start training
     for epoch in range(epochs):
         model.train()
@@ -119,14 +165,50 @@ def train(model: torch.nn.Module, train_graph: dgl.DGLGraph, valid_graph: dgl.DG
         torch.cuda.synchronize()
         end = time.time()
 
-        record = '\r=> Epoch {}\ttrain_acc: {:.4f}\ttrain_loss: {:.4f}\tvalid_acc: {:.4f}\tvalid_loss: {:.4f}\ttime: {:.4f}s'.format(epoch + 1, train_acc, train_loss.item(), valid_acc, valid_loss, end - start)
-        print(record)
-        fp.write(record + '\n')
+        print('Epoch {} \ttrain_acc: {:.4f}\ttrain_loss: {:.4f}\tvalid_acc: {:.4f}\tvalid_loss: {:.4f}\ttime: {:.4f}s'.format(epoch + 1, train_acc, train_loss.item(), valid_acc, valid_loss, end - start))
 
         if stop_acc != -1 and stop_acc <= valid_acc:
-            torch.save(model, 'model.bin')
-            break
-    fp.close()
+            torch.save(model, './model.pt')
+            record_train(stat_list)
+            return
+        if epoch % 100 == 0 and epoch != 0:
+            torch.save(model, './saved_model/model_' + str(epoch) + '.pt')
+            record_train(stat_list)
+            evaluate(model, test_graph, is_test=True)
+    torch.save(model, './model.pt')
+    record_train(stat_list)
+    evaluate(model, test_graph, is_test=True)
+    tsne_visualization(model, test_graph)
+
+
+def evaluate(model: torch.nn.Module, valid_graph: dgl.DGLGraph, is_test=False):
+    model.eval()
+    with torch.no_grad():
+        logits = model(valid_graph, {'conn': valid_graph.nodes['conn'].data['feat']})['conn']
+        loss = F.cross_entropy(logits, valid_graph.nodes['conn'].data['label'])
+        labels = valid_graph.nodes['conn'].data['label']
+        _, indices = torch.max(logits, dim=1)
+        correct = torch.sum(indices == labels)
+        # If testing, return a confusion matrix extra
+        if is_test:
+            labels, indices = labels.cpu(), indices.cpu()
+            mat = confusion_matrix(labels, indices)
+            # save cf_mat's csv and svg
+            np.savetxt('confusion_matrix.csv', mat, delimiter='\t', fmt='%d')
+            mat = mat / mat.sum(axis=1).reshape(-1, 1)
+            fig = plt.figure()
+            seaborn.heatmap(mat, cmap='Blues', annot=True, fmt='.2f')
+            fig.savefig('confusion_matrix.svg', bbox_inches='tight', dpi=100)
+            plt.close(fig)
+            # create report
+            with open('report.txt', 'w')as fp:
+                fp.write(classification_report(labels, indices, digits=6))
+            return correct.item() * 1.0 / len(labels), loss.item(), mat
+        else:
+            return correct.item() * 1.0 / len(labels), loss.item()
+
+
+def record_train(stat_list):
     # save the acc and loss of training and validation
     with open('train_test.csv', 'w', newline='') as fp:
         csv.writer(fp).writerows(stat_list)
@@ -146,29 +228,39 @@ def train(model: torch.nn.Module, train_graph: dgl.DGLGraph, valid_graph: dgl.DG
     plt.title('valid_loss')
     plt.plot(stat_list[:, 0], stat_list[:, 4])
     fig.savefig('train_test.svg', bbox_inches='tight', dpi=100)
+    plt.close(fig)
 
 
-def evaluate(model: torch.nn.Module, valid_graph: dgl.DGLGraph, is_test=False):
+def tsne_visualization(model=None, test_graph=None):
+    if model is None:
+        model = torch.load('model.pt')
+        model = model.cuda()
+    if test_graph is None:
+        [_, _, test_graph], _ = dgl.load_graphs('./Data/Dataset/train_valid_test.graph')
+        test_graph = test_graph.to('cuda:0')
     model.eval()
-    with torch.no_grad():
-        logits = model(valid_graph, {'conn': valid_graph.nodes['conn'].data['feat']})['conn']
-        loss = F.cross_entropy(logits, valid_graph.nodes['conn'].data['label'])
-        labels = valid_graph.nodes['conn'].data['label']
-        _, indices = torch.max(logits, dim=1)
-        correct = torch.sum(indices == labels)
-        # If testing, return a confusion matrix extra
-        if is_test:
-            labels, indices = labels.cpu(), indices.cpu()
-            mat = confusion_matrix(labels, indices)
-            # save cf_mat's csv and svg
-            np.savetxt('confusion_matrix.csv', mat, delimiter='\t', fmt='%.4f')
-            mat = mat / mat.sum(axis=1).reshape(-1, 1)
-            fig = plt.figure()
-            seaborn.heatmap(mat, cmap='Blues', annot=True, fmt='.2f')
-            fig.savefig('confusion_matrix.svg', bbox_inches='tight', dpi=100)
-            # create report
-            with open('report.txt', 'w')as fp:
-                fp.write(classification_report(labels, indices, digits=6))
-            return correct.item() * 1.0 / len(labels), loss.item(), mat
-        else:
-            return correct.item() * 1.0 / len(labels), loss.item()
+
+    def scatter_drawer(logits, labels, file):
+        logits = logits.cpu().detach().numpy()
+        labels = labels.cpu().detach().numpy()
+
+        print('tsne processing...')
+        emb = TSNE(n_iter=360).fit_transform(logits)
+        colors = np.array(['black', 'grey', 'red', 'orange', 'olive', 'green', 'lime', 'aqua', 'blue', 'fuchsia', 'purple'])
+        fig = plt.figure()
+        scatter = plt.scatter(emb[:, 0], emb[:, 1], c=colors[labels], s=1.5)
+        # plt.legend(*scatter.legend_elements(), loc="lower left", title="Classes")
+        fig.savefig(file, bbox_inches='tight')
+        plt.close(fig)
+
+    logits = test_graph.nodes['conn'].data['feat']
+    labels = test_graph.nodes['conn'].data['label']
+    scatter_drawer(logits, labels, 'emb_input.svg')
+
+    logits = model(test_graph, {'conn': test_graph.nodes['conn'].data['feat']}, hidden_only=True)['conn']
+    labels = test_graph.nodes['conn'].data['label']
+    scatter_drawer(logits, labels, 'emb_hidden.svg')
+
+    logits = model(test_graph, {'conn': test_graph.nodes['conn'].data['feat']}, hidden_only=False)['conn']
+    labels = test_graph.nodes['conn'].data['label']
+    scatter_drawer(logits, labels, 'emb_output.svg')

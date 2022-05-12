@@ -44,6 +44,8 @@ def dataset_initialize(sum_dir: str = './Data/Summary/Labelled', sum_list: list 
             for line in fin:
                 item = json.loads(line)
                 rand = random.random()
+                if item['conn']['orig_pkts'] == 0:
+                    continue
                 if rand <= train_scale:
                     f_train.write(line)
                     if item['label'] not in train_dict:
@@ -114,7 +116,7 @@ def build_relation_graph(raw_data: str):
     rel_latest, rel_edges, count = dict(), dict(), 0
     conn_feat, conn_label = list(), list()
 
-    for rel in ['conn_dp', 'conn_s', 'ftp_login', 'ssh_login', 'http_login']:
+    for rel in ['conn_sdp']:
         rel_latest[rel] = dict()
         rel_edges[rel] = ([], [])
 
@@ -122,92 +124,35 @@ def build_relation_graph(raw_data: str):
         item = json.loads(line)
         conn = item['conn']
         sip, dip, dport = conn['id.orig_h'], conn['id.resp_h'], conn['id.resp_p']
-        # # 'conn_sdp' relation
-        # if sip in rel_latest['conn_sdp'] and dip in rel_latest['conn_sdp'][sip] and dport in rel_latest['conn_sdp'][sip][dip]:
-        #     rel_edges['conn_sdp'][0].append(rel_latest['conn_sdp'][sip][dip][dport])
-        #     rel_edges['conn_sdp'][1].append(count)
-        #     rel_edges['conn_sdp'][1].append(rel_latest['conn_sdp'][sip][dip][dport])
-        #     rel_edges['conn_sdp'][0].append(count)
-        # else:
-        #     if sip not in rel_latest['conn_sdp']:
-        #         rel_latest['conn_sdp'][sip] = dict()
-        #     if dip not in rel_latest['conn_sdp'][sip]:
-        #         rel_latest['conn_sdp'][sip][dip] = dict()
-        # rel_latest['conn_sdp'][sip][dip][dport] = count
-        # # 'conn_sd' relation
-        # if sip in rel_latest['conn_sd'] and isinstance(rel_latest['conn_sd'][sip],dict) and dip in rel_latest['conn_sd'][sip]:
-        #     rel_edges['conn_sd'][0].append(rel_latest['conn_sd'][sip][dip])
-        #     rel_edges['conn_sd'][1].append(count)
-        #     rel_edges['conn_sd'][1].append(rel_latest['conn_sd'][sip][dip])
-        #     rel_edges['conn_sd'][0].append(count)
-        # else:
-        #     rel_latest['conn_sd'][sip] = dict()
-        # rel_latest['conn_sd'][sip][dip] = count
-        # 'conn_dp' relation
-        if dip in rel_latest['conn_dp'] and dport in rel_latest['conn_dp'][dip]:
-            rel_edges['conn_dp'][0].append(rel_latest['conn_dp'][dip][dport])
-            rel_edges['conn_dp'][1].append(count)
-            rel_edges['conn_dp'][1].append(rel_latest['conn_dp'][dip][dport])
-            rel_edges['conn_dp'][0].append(count)
+        # 'conn_sdp' relation
+        if sip in rel_latest['conn_sdp'] and dip in rel_latest['conn_sdp'][sip] and dport in rel_latest['conn_sdp'][sip][dip]:
+            rel_edges['conn_sdp'][0].append(rel_latest['conn_sdp'][sip][dip][dport])
+            rel_edges['conn_sdp'][1].append(count)
+            rel_edges['conn_sdp'][1].append(rel_latest['conn_sdp'][sip][dip][dport])
+            rel_edges['conn_sdp'][0].append(count)
         else:
-            rel_latest['conn_dp'][dip] = dict()
-        rel_latest['conn_dp'][dip][dport] = count
-        # 'conn_s' relation
-        if sip in rel_latest['conn_s']:
-            rel_edges['conn_s'][0].append(rel_latest['conn_s'][sip])
-            rel_edges['conn_s'][1].append(count)
-            rel_edges['conn_s'][1].append(rel_latest['conn_s'][sip])
-            rel_edges['conn_s'][0].append(count)
-        rel_latest['conn_s'][sip] = count
-        # # 'conn_d' relation
-        # if dip in rel_latest['conn_d']:
-        #     rel_edges['conn_d'][0].append(rel_latest['conn_d'][dip])
-        #     rel_edges['conn_d'][1].append(count)
-        #     rel_edges['conn_d'][1].append(rel_latest['conn_d'][dip])
-        #     rel_edges['conn_d'][0].append(count)
-        # rel_latest['conn_d'][dip]=count
-        # 'ftp_login' relation
-        if dip in rel_latest['ftp_login'] and conn['service'] == 1 and 'ftp' not in item:
-            rel_edges['ftp_login'][0].append(rel_latest['ftp_login'][dip])
-            rel_edges['ftp_login'][1].append(count)
-            rel_edges['ftp_login'][1].append(rel_latest['ftp_login'][dip])
-            rel_edges['ftp_login'][0].append(count)
-        rel_latest['ftp_login'][dip] = count
-        # 'ssh_login' relation
-        if dip in rel_latest['ssh_login'] and conn['service'] == 6 and 'ssh' in item and item['ssh']['auth_success'] == False:
-            rel_edges['ssh_login'][0].append(rel_latest['ssh_login'][dip])
-            rel_edges['ssh_login'][1].append(count)
-            rel_edges['ssh_login'][1].append(rel_latest['ssh_login'][dip])
-            rel_edges['ssh_login'][0].append(count)
-        rel_latest['ssh_login'][dip] = count
-        # 'http_login' relation
-        def check_login(domain, url):
-            word_list = ['passport', 'login', 'signin']
-            for word in word_list:
-                if word in domain or word in url:
-                    return True
-        if dip in rel_latest['http_login'] and conn['service'] == 2 and 'http' in item and check_login(item['http']['host'], item['http']['uri']):
-            rel_edges['http_login'][0].append(rel_latest['http_login'][dip])
-            rel_edges['http_login'][1].append(count)
-            rel_edges['http_login'][1].append(rel_latest['http_login'][dip])
-            rel_edges['http_login'][0].append(count)
-        rel_latest['http_login'][dip] = count
+            if sip not in rel_latest['conn_sdp']:
+                rel_latest['conn_sdp'][sip] = dict()
+            if dip not in rel_latest['conn_sdp'][sip]:
+                rel_latest['conn_sdp'][sip][dip] = dict()
+        rel_latest['conn_sdp'][sip][dip][dport] = count
         # store features and labels
         conn_feat.append(get_conn_feat(conn))
         conn_label.append(item['label'])
         count += 1
         print('\rLoading...', count, end='')
-    graph = dgl.heterograph({('conn', rel, 'conn'): (torch.tensor(rel_edges[rel][0]), torch.tensor(rel_edges[rel][1])) for rel in rel_edges})
+    graph = dgl.heterograph({('conn', rel, 'conn'): (torch.tensor(rel_edges[rel][0]), torch.tensor(rel_edges[rel][1])) for rel in rel_edges}, num_nodes_dict={'conn': count})
     graph.nodes['conn'].data['feat'] = torch.tensor(conn_feat)
     graph.nodes['conn'].data['label'] = torch.tensor(conn_label)
     return graph.to('cuda:0')
 
 
 def get_conn_feat(conn: dict):
-    duration = conn['duration']
-    orig_bytes, resp_bytes = conn['orig_bytes'], conn['resp_bytes']
+    duration = conn['duration'] if conn['duration'] != 0 else -1
     orig_ip_bytes, resp_ip_bytes = conn['orig_ip_bytes'], conn['resp_ip_bytes']
     orig_pkts, resp_pkts = conn['orig_pkts'], conn['resp_pkts']
     conn_state, history, proto, service = conn['conn_state'], conn['history'], conn['proto'], conn['service']
-    orig_pkt_interval, resp_pkt_interval = orig_pkts / duration if duration != 0 else 0, resp_pkts / duration if duration != 0 else 0
-    return [conn_state, proto, service, *history, duration, orig_bytes, resp_bytes, orig_ip_bytes, resp_ip_bytes, orig_pkts, resp_pkts, orig_pkt_interval, resp_pkt_interval]
+    orig_pkt_ps, resp_pkt_ps = orig_pkts / duration, resp_pkts / duration
+    orig_ip_bytes_ps, resp_ip_bytes_ps = orig_ip_bytes / duration, resp_ip_bytes / duration
+    bytes_ratio, pkts_ratio = resp_ip_bytes / orig_ip_bytes, resp_pkts / orig_pkts
+    return [conn_state, proto, service, *history, duration, orig_ip_bytes, resp_ip_bytes, orig_pkts, resp_pkts, orig_ip_bytes_ps, resp_ip_bytes_ps, orig_pkt_ps, resp_pkt_ps, bytes_ratio, pkts_ratio]

@@ -30,6 +30,7 @@ for opt in optlist:
         test_graph = test_graph.to('cuda:0')
         gnn.evaluate(model, test_graph, is_test=True)
         gnn.tsne_visualization(model, test_graph)
+        # mlp.evaluate(model, test_graph, is_test=True)
         # mlp.tsne_visualization(model, test_graph)
         exit(0)
 
@@ -50,9 +51,8 @@ else:
     valid_graph = valid_graph.to('cuda:0')
     test_graph = test_graph.to('cuda:0')
 
-model = gnn.M_SAGE(train_graph.etypes, 11)
-# model = gnn.M_GAT(train_graph.etypes, 11, 2)
-# model=mlp.MLP(11)
+# model = gnn.M_SAGE(train_graph.etypes, 53, [64, 64, 32], 11)
+model = mlp.MLP(53, [64, 64, 32], 11)
 
 model = model.cuda()
 gnn.train(model, train_graph, valid_graph, test_graph, 20000)
@@ -60,6 +60,3 @@ _, _, conf_mat = gnn.evaluate(model, test_graph, is_test=True)
 # mlp.train(model, train_graph, valid_graph, test_graph, 20000)
 # _, _, conf_mat = mlp.evaluate(model, test_graph, is_test=True)
 print(conf_mat)
-
-gnn.tsne_visualization(model, test_graph)
-# mlp.tsne_visualization(model, test_graph)

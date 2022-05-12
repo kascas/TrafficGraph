@@ -13,18 +13,16 @@ import shutil
 
 
 class MLP(torch.nn.Module):
-    def __init__(self, num_class) -> None:
+    def __init__(self, input_dim, hidden_dims, num_class) -> None:
         super().__init__()
-        self.hidden = torch.nn.Sequential(
-            torch.nn.Linear(51, 64),
-            torch.nn.ReLU(),
-            torch.nn.Linear(64, 64),
-            torch.nn.ReLU(),
-            torch.nn.Linear(64, 64),
-            torch.nn.ReLU(),
-        )
+
+        hidden_list = [torch.nn.Linear(input_dim, hidden_dims[0]), torch.nn.LeakyReLU()]
+        for i in range(1, len(hidden_dims)):
+            hidden_list.append(torch.nn.Linear(hidden_dims[i - 1], hidden_dims[i]))
+            hidden_list.append(torch.nn.LeakyReLU())
+        self.hidden = torch.nn.Sequential(*hidden_list)
         self.emb_layers = torch.nn.ModuleList([torch.nn.Embedding(14, 8), torch.nn.Embedding(5, 3), torch.nn.Embedding(10, 6)])
-        self.output = torch.nn.Linear(64, num_class)
+        self.output = torch.nn.Linear(hidden_dims[-1], num_class)
 
     def forward(self, inputs, hidden_only=False):
         # Embedding layers

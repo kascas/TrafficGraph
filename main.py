@@ -51,11 +51,14 @@ else:
     valid_graph = valid_graph.to('cuda:0')
     test_graph = test_graph.to('cuda:0')
 
-# model = gnn.M_SAGE(train_graph.etypes, 53, [64, 64, 32], 11)
-model = mlp.MLP(53, [64, 64, 32], 11)
+dataset.dataset_info()
+
+# model = gnn.M_GAT_orig(train_graph.etypes, [53, 64, 64, 64, 64], 11, num_heads=3, attn_drop=0.01, feat_drop=0.008)
+model = gnn.M_GAT(train_graph.etypes, [53, 64, 64, 64, 64], 11, num_heads=3, attn_drop=0.01, feat_drop=0.008)
+# model = mlp.MLP(53, [64, 64, 32], 11)
 
 model = model.cuda()
-gnn.train(model, train_graph, valid_graph, test_graph, 20000)
+gnn.train(model, train_graph, valid_graph, test_graph, 50000, lr=0.001, stop_acc=0.9975)
 _, _, conf_mat = gnn.evaluate(model, test_graph, is_test=True)
 # mlp.train(model, train_graph, valid_graph, test_graph, 20000)
 # _, _, conf_mat = mlp.evaluate(model, test_graph, is_test=True)

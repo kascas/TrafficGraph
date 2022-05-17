@@ -13,57 +13,77 @@ import seaborn
 from tsnecuda import TSNE
 
 
-class M_SAGE(torch.nn.Module):
-    def __init__(self, etypes: list, input_dim: int, hidden_dims: list, output_dim: int) -> None:
+class M_GAT(torch.nn.Module):
+    def __init__(self, etypes: list, gnn_dims: list, output_dim: int, num_heads=3, attn_drop=0, feat_drop=0) -> None:
         super().__init__()
         # Embedding layers transform indexes into embedding vectors
         self.emb_layers = torch.nn.ModuleList([torch.nn.Embedding(14, 8), torch.nn.Embedding(5, 3), torch.nn.Embedding(10, 6)])
         self.etypes = etypes
-        self.gnn_layers = [torch.nn.ModuleDict({e: dglnn.SAGEConv(input_dim, hidden_dims[0], aggregator_type='pool', activation=F.leaky_relu, feat_drop=0.006) for e in self.etypes})]
-        for i in range(1, len(hidden_dims) - 1):
-            self.gnn_layers.append(
-                torch.nn.ModuleDict({e: dglnn.SAGEConv(hidden_dims[i - 1], hidden_dims[i], aggregator_type='pool', activation=F.leaky_relu, feat_drop=0.006) for e in self.etypes})
-            )
-        self.gnn_layers = torch.nn.ModuleList(self.gnn_layers)
-        self.linear = torch.nn.Linear(hidden_dims[-2] * len(self.etypes), hidden_dims[-1])
-        self.att_mat = torch.nn.parameter.Parameter(torch.empty(hidden_dims[-2], hidden_dims[-2]))
-        torch.nn.init.xavier_uniform_(self.att_mat)
-        self.output_layer = torch.nn.Linear(hidden_dims[-1], output_dim)
+        # gnn layers
+        self.gnn_layers = torch.nn.ModuleList([
+            torch.nn.ModuleDict({
+                e: dglnn.GATConv(gnn_dims[i - 1] * num_heads, gnn_dims[i], num_heads=num_heads, activation=F.leaky_relu, allow_zero_in_degree=True, attn_drop=attn_drop, feat_drop=feat_drop) for e in self.etypes
+            }) if i != 1 else
+            torch.nn.ModuleDict({
+                e: dglnn.GATConv(gnn_dims[0], gnn_dims[1], num_heads=num_heads, activation=F.leaky_relu, allow_zero_in_degree=True, attn_drop=attn_drop, feat_drop=feat_drop) for e in self.etypes
+            })
+            for i in range(1, len(gnn_dims))
+        ])
+        self.output_layer = torch.nn.ModuleDict({
+            e: dglnn.GATConv(gnn_dims[-1] * num_heads, output_dim, num_heads=1, residual=False, activation=None, allow_zero_in_degree=True, attn_drop=attn_drop, feat_drop=feat_drop) for e in self.etypes
+        })
 
-    def forward(self, graph: dgl.DGLGraph, inputs, hidden_only=False):
+    def forward(self, graph: dgl.DGLGraph, inputs):
+        # TODO add_self_loop is necessary?
         self.subgraphs = {e: graph['conn', e, 'conn'] for e in self.etypes}
         self.inputs = inputs.clone()
         # Embedding layers
         conn_state_emb = self.emb_layers[0](self.inputs[:, 0].type(torch.int))
         proto_emb = self.emb_layers[1](self.inputs[:, 1].type(torch.int))
         service_emb = self.emb_layers[2](self.inputs[:, 2].type(torch.int))
-
         self.inputs = torch.cat([conn_state_emb, proto_emb, service_emb, self.inputs[:, 3:]], dim=1)
+        # GNN layers
         h = {e: self.inputs for e in self.etypes}
         for gnn_layer in self.gnn_layers:
-            h = {e: gnn_layer[e](self.subgraphs[e], h[e]) for e in self.etypes}
+            h = {e: gnn_layer[e](self.subgraphs[e], h[e]).flatten(1) for e in self.etypes}
+        h = {e: self.output_layer[e](self.subgraphs[e], h[e]).flatten(1) for e in self.etypes}
+        # mean
+        h = torch.stack([h[e].flatten(1) for e in self.etypes], dim=1).mean(dim=1)
+        return h
 
-        # h = self.attention(self.inputs, [h[e] for e in self.etypes])
-        h = {ep: self.attention(h[ep], [h[e] for e in self.etypes]) for ep in self.etypes}
-        h = F.leaky_relu(self.linear(torch.cat([h[e] for e in self.etypes], dim=1)))
-        # h = torch.cat([h[e].unsqueeze(dim=1) for e in self.etypes], dim=1).mean(dim=1)
-        if hidden_only:
-            return h
-        else:
-            return self.output_layer(h)
 
-    def attention(self, inputs, tensors: list):
-        # change tensors's shape to (node_num, dim_num, out_feats)
-        tensors = torch.stack(tensors, 1).to('cuda:0')
-        # X.shape is (node_num, dim_num, out_feats), q.shape is (node_num, in_feats, 1), self,trans.shape is (out_feats, in_feats)
-        X, q = tensors, inputs.unsqueeze(2)
-        # (node_num, dim_num, out_feats)*(out_feats, in_feats) => (node_num, dim_num, in_feats)
-        att_score = torch.matmul(X, self.att_mat)
-        # (node_num, dim_num, in_feats)*(node_num, in_feats, 1) => (node_num, dim_num, 1)
-        att_score = torch.matmul(att_score, q)
-        att_score = F.softmax(att_score, dim=1)
-        # (node_num, out_feats, dim_num)*(node_num, dim_num, 1) => (node_num, out_feats, 1)
-        return X.permute(0, 2, 1).matmul(att_score).squeeze(2)
+class M_GAT_orig(torch.nn.Module):
+    def __init__(self, etypes: list, gnn_dims: list, output_dim: int, num_heads=3, attn_drop=0, feat_drop=0) -> None:
+        super().__init__()
+        # Embedding layers transform indexes into embedding vectors
+        self.emb_layers = torch.nn.ModuleList([torch.nn.Embedding(14, 8), torch.nn.Embedding(5, 3), torch.nn.Embedding(10, 6)])
+        # use normal HeteroGraphConv to aggregate neighborhood information
+        self.gnn_layers = torch.nn.ModuleList([
+            dglnn.HeteroGraphConv({
+                e: dglnn.GATConv(gnn_dims[i - 1] * num_heads, gnn_dims[i], num_heads=num_heads, activation=F.leaky_relu, allow_zero_in_degree=True, attn_drop=attn_drop, feat_drop=feat_drop)for e in etypes
+            }, aggregate='mean') if i != 1 else
+            dglnn.HeteroGraphConv({
+                e: dglnn.GATConv(gnn_dims[0], gnn_dims[1], num_heads=num_heads, activation=F.leaky_relu, allow_zero_in_degree=True, attn_drop=attn_drop, feat_drop=feat_drop)for e in etypes
+            }, aggregate='mean')
+            for i in range(1, len(gnn_dims))
+        ])
+        self.output_layer = dglnn.HeteroGraphConv({
+            e: dglnn.GATConv(gnn_dims[-1] * num_heads, output_dim, num_heads=1, activation=F.leaky_relu, allow_zero_in_degree=True, attn_drop=attn_drop, feat_drop=feat_drop)for e in etypes
+        }, aggregate='mean')
+
+    def forward(self, graph, inputs):
+        self.inputs = inputs.clone()
+        # Embedding layers
+        conn_state_emb = self.emb_layers[0](self.inputs[:, 0].type(torch.int))
+        proto_emb = self.emb_layers[1](self.inputs[:, 1].type(torch.int))
+        service_emb = self.emb_layers[2](self.inputs[:, 2].type(torch.int))
+        self.inputs = torch.cat([conn_state_emb, proto_emb, service_emb, self.inputs[:, 3:]], dim=1)
+
+        h = {'conn': self.inputs}
+        for gnn_layer in self.gnn_layers:
+            h = {'conn': gnn_layer(graph, h)['conn'].flatten(1)}
+        h = self.output_layer(graph, h)['conn'].flatten(1)
+        return h
 
 
 class FocalLoss(torch.nn.Module):
@@ -120,8 +140,8 @@ def train(model: torch.nn.Module, train_graph: dgl.DGLGraph, valid_graph: dgl.DG
         # backward propagation
 
         logits = model(train_graph, train_graph.nodes['conn'].data['feat'])
-        train_loss = F.cross_entropy(logits, train_graph.nodes['conn'].data['label'])
-        # train_loss = FocalLoss(gamma=2)(logits, train_graph.nodes['conn'].data['label'])
+        # train_loss = F.cross_entropy(logits, train_graph.nodes['conn'].data['label'])
+        train_loss = FocalLoss(gamma=2)(logits, train_graph.nodes['conn'].data['label'])
         opt.zero_grad()
         train_loss.backward()
         opt.step()
@@ -151,15 +171,14 @@ def train(model: torch.nn.Module, train_graph: dgl.DGLGraph, valid_graph: dgl.DG
     torch.save(model, './model.pt')
     record_train(stat_list)
     evaluate(model, test_graph, is_test=True)
-    tsne_visualization(model, test_graph)
 
 
 def evaluate(model: torch.nn.Module, valid_graph: dgl.DGLGraph, is_test=False):
     model.eval()
     with torch.no_grad():
         logits = model(valid_graph, valid_graph.nodes['conn'].data['feat'])
-        loss = F.cross_entropy(logits, valid_graph.nodes['conn'].data['label'])
-        # loss = FocalLoss(gamma=2)(logits, valid_graph.nodes['conn'].data['label'])
+        # loss = F.cross_entropy(logits, valid_graph.nodes['conn'].data['label'])
+        loss = FocalLoss(gamma=2)(logits, valid_graph.nodes['conn'].data['label'])
         labels = valid_graph.nodes['conn'].data['label']
         _, indices = torch.max(logits, dim=1)
         correct = torch.sum(indices == labels)
@@ -219,7 +238,7 @@ def tsne_visualization(model=None, test_graph=None):
         labels = labels.cpu().detach().numpy()
 
         print('tsne processing...')
-        emb = TSNE(n_iter=360).fit_transform(logits)
+        emb = TSNE(n_iter=350).fit_transform(logits)
         colors = np.array(['black', 'grey', 'red', 'orange', 'olive', 'green', 'lime', 'aqua', 'blue', 'fuchsia', 'purple'])
         fig = plt.figure()
         scatter = plt.scatter(emb[:, 0], emb[:, 1], c=colors[labels], s=1.5)
@@ -231,10 +250,6 @@ def tsne_visualization(model=None, test_graph=None):
     labels = test_graph.nodes['conn'].data['label']
     scatter_drawer(logits, labels, 'emb_input.svg')
 
-    logits = model(test_graph, test_graph.nodes['conn'].data['feat'], hidden_only=True)
+    logits = model(test_graph, test_graph.nodes['conn'].data['feat'])
     labels = test_graph.nodes['conn'].data['label']
     scatter_drawer(logits, labels, 'emb_hidden.svg')
-
-    logits = model(test_graph, test_graph.nodes['conn'].data['feat'], hidden_only=False)
-    labels = test_graph.nodes['conn'].data['label']
-    scatter_drawer(logits, labels, 'emb_output.svg')

@@ -140,8 +140,8 @@ def train(model: torch.nn.Module, train_graph: dgl.DGLGraph, valid_graph: dgl.DG
         # backward propagation
 
         logits = model(train_graph, train_graph.nodes['conn'].data['feat'])
-        # train_loss = F.cross_entropy(logits, train_graph.nodes['conn'].data['label'])
-        train_loss = FocalLoss(gamma=2)(logits, train_graph.nodes['conn'].data['label'])
+        train_loss = F.cross_entropy(logits, train_graph.nodes['conn'].data['label'])
+        # train_loss = FocalLoss(gamma=2)(logits, train_graph.nodes['conn'].data['label'])
         opt.zero_grad()
         train_loss.backward()
         opt.step()
@@ -177,8 +177,8 @@ def evaluate(model: torch.nn.Module, valid_graph: dgl.DGLGraph, is_test=False):
     model.eval()
     with torch.no_grad():
         logits = model(valid_graph, valid_graph.nodes['conn'].data['feat'])
-        # loss = F.cross_entropy(logits, valid_graph.nodes['conn'].data['label'])
-        loss = FocalLoss(gamma=2)(logits, valid_graph.nodes['conn'].data['label'])
+        loss = F.cross_entropy(logits, valid_graph.nodes['conn'].data['label'])
+        # loss = FocalLoss(gamma=2)(logits, valid_graph.nodes['conn'].data['label'])
         labels = valid_graph.nodes['conn'].data['label']
         _, indices = torch.max(logits, dim=1)
         correct = torch.sum(indices == labels)

@@ -1,3 +1,4 @@
+import math
 import os
 import json
 import random
@@ -111,31 +112,114 @@ def dataset_adjust(class_scale: dict = cicids2017):
         os.rename(temp, file)
 
 
+def dataset_info():
+    f_train = open('./Data/Dataset/raw/train.json', 'r')
+    f_valid = open('./Data/Dataset/raw/valid.json', 'r')
+    f_test = open('./Data/Dataset/raw/test.json', 'r')
+
+    def get_stat(fp):
+        d = dict()
+        for line in fp:
+            item = json.loads(line)
+            if item['label'] not in d:
+                d[item['label']] = 0
+            else:
+                d[item['label']] += 1
+        return d
+
+    train_dict = dict(sorted(get_stat(f_train).items(), key=lambda x: x[0]))
+    valid_dict = dict(sorted(get_stat(f_valid).items(), key=lambda x: x[0]))
+    test_dict = dict(sorted(get_stat(f_test).items(), key=lambda x: x[0]))
+
+    f_train.close()
+    f_valid.close()
+    f_test.close()
+
+    print(train_dict)
+    print(valid_dict)
+    print(test_dict)
+
+    with open('dataset_info.txt', 'w')as fp:
+        fp.write('> train_data: {}\n'.format(train_dict))
+        fp.write('> valid_data: {}\n'.format(valid_dict))
+        fp.write('> test_data : {}\n'.format(test_dict))
+    return
+
+
 def build_relation_graph(raw_data: str):
     fp = open(raw_data, 'r')
     rel_latest, rel_edges, count = dict(), dict(), 0
     conn_feat, conn_label = list(), list()
 
-    for rel in ['conn_sdp']:
+    for rel in ['conn_sdp', 'auth_http', 'auth_ftp', 'auth_ssh', 'state_normal', 'state_abnormal']:
         rel_latest[rel] = dict()
-        rel_edges[rel] = ([], [])
+    for rel in ['conn', 'auth', 'state']:
+        rel_edges[rel] = [[], []]
 
     for line in fp:
         item = json.loads(line)
         conn = item['conn']
         sip, dip, dport = conn['id.orig_h'], conn['id.resp_h'], conn['id.resp_p']
-        # 'conn_sdp' relation
+        # conn - conn_sdp
         if sip in rel_latest['conn_sdp'] and dip in rel_latest['conn_sdp'][sip] and dport in rel_latest['conn_sdp'][sip][dip]:
-            rel_edges['conn_sdp'][0].append(rel_latest['conn_sdp'][sip][dip][dport])
-            rel_edges['conn_sdp'][1].append(count)
-            rel_edges['conn_sdp'][1].append(rel_latest['conn_sdp'][sip][dip][dport])
-            rel_edges['conn_sdp'][0].append(count)
-        else:
-            if sip not in rel_latest['conn_sdp']:
-                rel_latest['conn_sdp'][sip] = dict()
-            if dip not in rel_latest['conn_sdp'][sip]:
-                rel_latest['conn_sdp'][sip][dip] = dict()
+            latest_count = rel_latest['conn_sdp'][sip][dip][dport]
+            rel_edges['conn'][0] += [latest_count, count]
+            rel_edges['conn'][1] += [count, latest_count]
+        if sip not in rel_latest['conn_sdp']:
+            rel_latest['conn_sdp'][sip] = dict()
+        if dip not in rel_latest['conn_sdp'][sip]:
+            rel_latest['conn_sdp'][sip][dip] = dict()
         rel_latest['conn_sdp'][sip][dip][dport] = count
+        # auth - auth_ftp
+        if sip in rel_latest['auth_ftp'] and dip in rel_latest['auth_ftp'][sip]:
+            if conn['service'] == 1 and 'ftp' not in item:
+                latest_count = rel_latest['auth_ftp'][sip][dip]
+                rel_edges['auth'][0] += [latest_count, count]
+                rel_edges['auth'][1] += [count, latest_count]
+        if sip not in rel_latest['auth_ftp']:
+            rel_latest['auth_ftp'][sip] = dict()
+        rel_latest['auth_ftp'][sip][dip] = count
+        # auth - auth_ssh
+        if sip in rel_latest['auth_ssh'] and dip in rel_latest['auth_ssh'][sip]:
+            if conn['service'] == 6 and 'ssh' in item and item['ssh']['auth_success'] == False:
+                latest_count = rel_latest['auth_ssh'][sip][dip]
+                rel_edges['auth'][0] += [latest_count, count]
+                rel_edges['auth'][1] += [count, latest_count]
+        if sip not in rel_latest['auth_ssh']:
+            rel_latest['auth_ssh'][sip] = dict()
+        rel_latest['auth_ssh'][sip][dip] = count
+        # auth - auth_http
+        def check_login(domain, url):
+            word_list = ['passport', 'login', 'signin']
+            for word in word_list:
+                if word in domain or word in url:
+                    return True
+        if sip in rel_latest['auth_http'] and dip in rel_latest['auth_http'][sip]:
+            if conn['service'] == 2 and 'http' in item and check_login(item['http']['host'], item['http']['uri']):
+                latest_count = rel_latest['auth_http'][sip][dip]
+                rel_edges['auth'][0] += [latest_count, count]
+                rel_edges['auth'][1] += [count, latest_count]
+        if sip not in rel_latest['auth_http']:
+            rel_latest['auth_http'][sip] = dict()
+        rel_latest['auth_http'][sip][dip] = count
+        # state - state_normal
+        if sip in rel_latest['state_normal'] and dip in rel_latest['state_normal'][sip]:
+            if conn['conn_state'] == 2:
+                latest_count = rel_latest['state_normal'][sip][dip]
+                rel_edges['state'][0] += [latest_count, count]
+                rel_edges['state'][1] += [count, latest_count]
+        if sip not in rel_latest['state_normal']:
+            rel_latest['state_normal'][sip] = dict()
+        rel_latest['state_normal'][sip][dip] = count
+        # state - state_abnormal
+        if sip in rel_latest['state_abnormal'] and dip in rel_latest['state_abnormal'][sip]:
+            if conn['conn_state'] != 2:
+                latest_count = rel_latest['state_abnormal'][sip][dip]
+                rel_edges['state'][0] += [latest_count, count]
+                rel_edges['state'][1] += [count, latest_count]
+        if sip not in rel_latest['state_abnormal']:
+            rel_latest['state_abnormal'][sip] = dict()
+        rel_latest['state_abnormal'][sip][dip] = count
         # store features and labels
         conn_feat.append(get_conn_feat(conn))
         conn_label.append(item['label'])
@@ -149,10 +233,10 @@ def build_relation_graph(raw_data: str):
 
 def get_conn_feat(conn: dict):
     duration = conn['duration'] if conn['duration'] != 0 else -1
-    orig_ip_bytes, resp_ip_bytes = conn['orig_ip_bytes'], conn['resp_ip_bytes']
+    orig_bytes, resp_bytes = conn['orig_ip_bytes'], conn['resp_ip_bytes']
     orig_pkts, resp_pkts = conn['orig_pkts'], conn['resp_pkts']
     conn_state, history, proto, service = conn['conn_state'], conn['history'], conn['proto'], conn['service']
     orig_pkt_ps, resp_pkt_ps = orig_pkts / duration, resp_pkts / duration
-    orig_ip_bytes_ps, resp_ip_bytes_ps = orig_ip_bytes / duration, resp_ip_bytes / duration
-    bytes_ratio, pkts_ratio = resp_ip_bytes / orig_ip_bytes, resp_pkts / orig_pkts
-    return [conn_state, proto, service, *history, duration, orig_ip_bytes, resp_ip_bytes, orig_pkts, resp_pkts, orig_ip_bytes_ps, resp_ip_bytes_ps, orig_pkt_ps, resp_pkt_ps, bytes_ratio, pkts_ratio]
+    orig_ip_bytes_ps, resp_ip_bytes_ps = orig_bytes / duration, resp_bytes / duration
+    bytes_ratio, pkts_ratio = resp_bytes / orig_bytes if orig_bytes != 0 else -1, resp_pkts / orig_pkts
+    return [conn_state, proto, service, *history, duration, orig_bytes, resp_bytes, orig_pkts, resp_pkts, orig_ip_bytes_ps, resp_ip_bytes_ps, orig_pkt_ps, resp_pkt_ps, bytes_ratio, pkts_ratio]

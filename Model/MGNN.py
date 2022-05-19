@@ -5,6 +5,7 @@ import time
 import dgl
 import dgl.nn.pytorch as dglnn
 import numpy as np
+import sklearn
 import torch
 import torch.nn.functional as F
 from sklearn.metrics import confusion_matrix, classification_report
@@ -122,10 +123,11 @@ class FocalLoss(torch.nn.Module):
             return loss.sum()
 
 
-def train(model: torch.nn.Module, train_graph: dgl.DGLGraph, valid_graph: dgl.DGLGraph, test_graph: dgl.DGLGraph, epochs: int, stop_acc: float = -1, lr=0.001):
+def train(model: torch.nn.Module, train_graph: dgl.DGLGraph, valid_graph: dgl.DGLGraph, test_graph: dgl.DGLGraph, epochs: int, stop_acc: float = -1, lr=0.001, lr_step=1000, lr_gamma=0.8):
     print('\r________________________\nStart training...')
     # optimizer of training
     opt = torch.optim.Adam(model.parameters(), lr=lr)
+    scheduler = torch.optim.lr_scheduler.StepLR(opt, step_size=lr_step, gamma=lr_gamma)
     stat_list = []
     if not os.path.exists('./saved_model'):
         os.makedirs('./saved_model')
@@ -145,6 +147,7 @@ def train(model: torch.nn.Module, train_graph: dgl.DGLGraph, valid_graph: dgl.DG
         opt.zero_grad()
         train_loss.backward()
         opt.step()
+        scheduler.step()
         # train_acc and train_loss
         labels = train_graph.nodes['conn'].data['label']
         _, indices = torch.max(logits, dim=1)
@@ -188,10 +191,10 @@ def evaluate(model: torch.nn.Module, valid_graph: dgl.DGLGraph, is_test=False):
             mat = confusion_matrix(labels, indices)
             # save cf_mat's csv and svg
             np.savetxt('confusion_matrix.csv', mat, delimiter='\t', fmt='%d')
-            mat = mat / mat.sum(axis=1).reshape(-1, 1)
-            fig = plt.figure()
+            mat = mat / mat.sum(axis=1).reshape(-1, 1) * 100
+            fig = plt.figure(figsize=(9, 7))
             seaborn.heatmap(mat, cmap='Blues', annot=True, fmt='.2f')
-            fig.savefig('confusion_matrix.svg', bbox_inches='tight', dpi=100)
+            fig.savefig('confusion_matrix.svg', bbox_inches='tight', dpi=100, square=True)
             plt.close(fig)
             # create report
             with open('report.txt', 'w')as fp:
@@ -238,10 +241,10 @@ def tsne_visualization(model=None, test_graph=None):
         labels = labels.cpu().detach().numpy()
 
         print('tsne processing...')
-        emb = TSNE(n_iter=350).fit_transform(logits)
+        emb = TSNE(n_iter=280, num_neighbors=48, learning_rate=50).fit_transform(logits)
         colors = np.array(['black', 'grey', 'red', 'orange', 'olive', 'green', 'lime', 'aqua', 'blue', 'fuchsia', 'purple'])
         fig = plt.figure()
-        scatter = plt.scatter(emb[:, 0], emb[:, 1], c=colors[labels], s=1.5)
+        scatter = plt.scatter(emb[:, 0], emb[:, 1], c=colors[labels], s=2)
         # plt.legend(*scatter.legend_elements(), loc="lower left", title="Classes")
         fig.savefig(file, bbox_inches='tight')
         plt.close(fig)

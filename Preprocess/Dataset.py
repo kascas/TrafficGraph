@@ -3,6 +3,7 @@ import os
 import json
 import random
 import dgl
+import numpy as np
 import torch
 
 
@@ -189,6 +190,7 @@ def build_relation_graph(raw_data: str):
             rel_latest['auth_ssh'][sip] = dict()
         rel_latest['auth_ssh'][sip][dip] = count
         # auth - auth_http
+
         def check_login(domain, url):
             word_list = ['passport', 'login', 'signin']
             for word in word_list:
@@ -221,13 +223,14 @@ def build_relation_graph(raw_data: str):
             rel_latest['state_abnormal'][sip] = dict()
         rel_latest['state_abnormal'][sip][dip] = count
         # store features and labels
-        conn_feat.append(get_conn_feat(conn))
+        # conn_feat.append(get_conn_feat(conn))
         conn_label.append(item['label'])
         count += 1
         print('\rLoading...', count, end='')
     graph = dgl.heterograph({('conn', rel, 'conn'): (torch.tensor(rel_edges[rel][0]), torch.tensor(rel_edges[rel][1])) for rel in rel_edges}, num_nodes_dict={'conn': count})
-    graph.nodes['conn'].data['feat'] = torch.tensor(conn_feat)
-    graph.nodes['conn'].data['label'] = torch.tensor(conn_label)
+    graph.nodes['conn'].data['feat'] = torch.tensor(build_conn_feat(raw_data), dtype=torch.float32)
+    graph.nodes['conn'].data['label'] = torch.tensor(conn_label, dtype=torch.long)
+    fp.close()
     return graph.to('cuda:0')
 
 
@@ -237,6 +240,61 @@ def get_conn_feat(conn: dict):
     orig_pkts, resp_pkts = conn['orig_pkts'], conn['resp_pkts']
     conn_state, history, proto, service = conn['conn_state'], conn['history'], conn['proto'], conn['service']
     orig_pkt_ps, resp_pkt_ps = orig_pkts / duration, resp_pkts / duration
-    orig_ip_bytes_ps, resp_ip_bytes_ps = orig_bytes / duration, resp_bytes / duration
+    orig_bytes_ps, resp_bytes_ps = orig_bytes / duration, resp_bytes / duration
     bytes_ratio, pkts_ratio = resp_bytes / orig_bytes if orig_bytes != 0 else -1, resp_pkts / orig_pkts
-    return [conn_state, proto, service, *history, duration, orig_bytes, resp_bytes, orig_pkts, resp_pkts, orig_ip_bytes_ps, resp_ip_bytes_ps, orig_pkt_ps, resp_pkt_ps, bytes_ratio, pkts_ratio]
+    return [conn_state, proto, service, *history, duration, orig_bytes, resp_bytes, orig_pkts, resp_pkts, orig_bytes_ps, resp_bytes_ps, orig_pkt_ps, resp_pkt_ps, bytes_ratio, pkts_ratio]
+
+
+def build_conn_feat(raw_data):
+    fp = open(raw_data, 'r')
+    sdp_ts, sdp_bytes, sdp_pkts = dict(), dict(), dict()
+    index_list = list()
+    conn_feats = list()
+
+    for line in fp:
+        item = json.loads(line)
+        conn = item['conn']
+        sip, dip, dport = conn['id.orig_h'], conn['id.resp_h'], conn['id.resp_p']
+        feat = get_conn_feat(conn)
+        key = sip + dip + str(dport)
+        if key not in sdp_ts:
+            sdp_ts[key] = []
+        if key not in sdp_bytes:
+            sdp_bytes[key] = []
+        if key not in sdp_pkts:
+            sdp_pkts[key] = []
+
+        if len(sdp_ts[key]) > 0:
+            latest_ts = sdp_ts[key].pop()
+            sdp_ts[key].append(math.exp(-conn['ts'] + latest_ts))
+        sdp_ts[key].append(conn['ts'])
+        sdp_bytes[key].append([feat[-10], feat[-9], feat[-2]])
+        sdp_pkts[key].append([feat[-8], feat[-7], feat[-3]])
+        index_list.append((key, len(sdp_bytes[key]) - 1))
+        conn_feats.append(feat)
+
+    for k in sdp_ts:
+        sdp_ts[k].pop()
+
+    for (count, (key, index)) in enumerate(index_list):
+        start, end = index - 5 if index - 5 >= 0 else 0, index + 5 if index + 5 <= len(sdp_ts[key]) else len(sdp_ts[key])
+        if len(sdp_ts[key]) == 0:
+            conn_feats[count] += [0 for i in range(14)]
+        else:
+            ts_win = np.array(sdp_ts[key][start:end])
+            bytes_win = np.array(sdp_bytes[key][start:end])
+            pkts_win = np.array(sdp_pkts[key][start:end])
+
+            orig_bytes_win, resp_bytes_win, bytes_ratio_win = bytes_win[:, 0], bytes_win[:, 1], bytes_win[:, 2]
+            orig_pkts_win, resp_pkts_win, pkts_ratio_win = pkts_win[:, 0], pkts_win[:, 1], pkts_win[:, 2]
+
+            conn_feats[count] += [
+                ts_win.var(), ts_win.mean(),
+                orig_bytes_win.std(), orig_bytes_win.mean(),
+                resp_bytes_win.std(), resp_bytes_win.mean(),
+                orig_pkts_win.std(), orig_pkts_win.mean(),
+                resp_pkts_win.std(), resp_pkts_win.mean(),
+                bytes_ratio_win.std(), bytes_ratio_win.mean(),
+                pkts_ratio_win.std(), pkts_ratio_win.mean(),
+            ]
+    return conn_feats

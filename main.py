@@ -12,7 +12,7 @@ init_data, rebuild_graph, specify_dataset = False, False, None
 
 dataset_dict = {
     'cicids2017': {
-        0: 0.04, 5: 0.08, 9: 0.08, 10: 0.15
+        0: 0.06, 5: 0.08, 9: 0.1, 10: 0.16
     },
 }
 for opt in optlist:
@@ -53,13 +53,12 @@ else:
 
 dataset.dataset_info()
 
-# model = gnn.M_GAT_orig(train_graph.etypes, [53, 64, 64, 64, 64], 11, num_heads=3, attn_drop=0.01, feat_drop=0.008)
-model = gnn.M_GAT(train_graph.etypes, [67, 72, 72, 72], 11, num_heads=3, attn_drop=0.005, feat_drop=0.025)
-# model = mlp.MLP(67, [72, 72, 72], 11)
+model = gnn.M_GAT(train_graph.etypes, [64, 72, 72, 72, 32], 12, num_heads=3, attn_drop=0.005, feat_drop=0.03)
+# model = mlp.MLP(64, [72, 72, 72, 32], 12)
 
 model = model.cuda()
-gnn.train(model, train_graph, valid_graph, test_graph, 50000, lr=0.002, lr_step=1000, lr_gamma=0.9)
+gnn.train(model, train_graph, valid_graph, test_graph, 50000, lr=0.01, lr_step=1000, lr_gamma=0.8)
 _, _, conf_mat = gnn.evaluate(model, test_graph, is_test=True)
-# mlp.train(model, train_graph, valid_graph, test_graph, 20000)
+# mlp.train(model, train_graph, valid_graph, test_graph, 20000, lr=0.001)
 # _, _, conf_mat = mlp.evaluate(model, test_graph, is_test=True)
 print(conf_mat)

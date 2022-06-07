@@ -1,3 +1,4 @@
+from copy import deepcopy
 from sklearn.metrics import classification_report, confusion_matrix
 import torch
 import matplotlib.pyplot as plt
@@ -19,22 +20,27 @@ class MLP(torch.nn.Module):
         hidden_list = [torch.nn.Linear(input_dim, hidden_dims[0]), torch.nn.LeakyReLU()]
         for i in range(1, len(hidden_dims)):
             hidden_list.append(torch.nn.Linear(hidden_dims[i - 1], hidden_dims[i]))
+            hidden_list.append(torch.nn.Dropout(0.05))
             hidden_list.append(torch.nn.LeakyReLU())
-        self.hidden = torch.nn.Sequential(*hidden_list)
+        self.hidden = torch.nn.ModuleList([torch.nn.Sequential(*hidden_list) for i in range(3)])
         self.emb_layers = torch.nn.ModuleList([torch.nn.Embedding(14, 8), torch.nn.Embedding(5, 3), torch.nn.Embedding(10, 6)])
-        self.output = torch.nn.Linear(hidden_dims[-1], num_class)
+        self.output = torch.nn.Linear(hidden_dims[-1] * 3, num_class)
 
     def forward(self, inputs, hidden_only=False):
         # Embedding layers
-        conn_state_emb = self.emb_layers[0](inputs[:, 0].type(torch.int))
-        proto_emb = self.emb_layers[1](inputs[:, 1].type(torch.int))
-        service_emb = self.emb_layers[2](inputs[:, 2].type(torch.int))
+        self.inputs = deepcopy(inputs)
+        for etype in ['conn', 'auth', 'state']:
+            conn_state_emb = self.emb_layers[0](self.inputs[etype][:, 0].type(torch.int))
+            proto_emb = self.emb_layers[1](self.inputs[etype][:, 1].type(torch.int))
+            service_emb = self.emb_layers[2](self.inputs[etype][:, 2].type(torch.int))
+            self.inputs[etype] = torch.cat([conn_state_emb, proto_emb, service_emb, inputs[etype][:, 3:]], dim=1)
         # h is the actual input of MGNN layer
-        inputs = torch.cat([conn_state_emb, proto_emb, service_emb, inputs[:, 3:]], dim=1)
-        h = self.hidden(inputs)
-        if hidden_only:
-            return h
-        h = self.output(h)
+        h = [
+            self.hidden[0](self.inputs['conn']),
+            self.hidden[1](self.inputs['auth']),
+            self.hidden[2](self.inputs['state'])
+        ]
+        h = self.output(torch.cat(h, dim=1))
         return h
 
 
@@ -54,7 +60,7 @@ def train(model: torch.nn.Module, train_graph: dgl.DGLGraph, valid_graph: dgl.DG
         torch.cuda.synchronize()
         start = time.time()
         # backward propagation
-        logits = model(train_graph.nodes['conn'].data['feat'])
+        logits = model(train_graph.nodes['conn'].data)
         train_loss = F.cross_entropy(logits, train_graph.nodes['conn'].data['label'])
         opt.zero_grad()
         train_loss.backward()
@@ -91,7 +97,7 @@ def train(model: torch.nn.Module, train_graph: dgl.DGLGraph, valid_graph: dgl.DG
 def evaluate(model: torch.nn.Module, valid_graph: dgl.DGLGraph, is_test=False):
     model.eval()
     with torch.no_grad():
-        logits = model(valid_graph.nodes['conn'].data['feat'])
+        logits = model(valid_graph.nodes['conn'].data)
         loss = F.cross_entropy(logits, valid_graph.nodes['conn'].data['label'])
         labels = valid_graph.nodes['conn'].data['label']
         _, indices = torch.max(logits, dim=1)
@@ -102,10 +108,11 @@ def evaluate(model: torch.nn.Module, valid_graph: dgl.DGLGraph, is_test=False):
             mat = confusion_matrix(labels, indices)
             # save cf_mat's csv and svg
             np.savetxt('confusion_matrix.csv', mat, delimiter='\t', fmt='%d')
-            mat = mat / mat.sum(axis=1).reshape(-1, 1)
-            fig = plt.figure()
-            seaborn.heatmap(mat, cmap='Blues', annot=True, fmt='.2f')
-            fig.savefig('confusion_matrix.svg', bbox_inches='tight', dpi=100)
+            mat = np.around(mat / mat.sum(axis=1).reshape(-1, 1), 4)
+            # mat = mat / mat.sum(axis=1).reshape(-1, 1)
+            fig = plt.figure(figsize=(11, 9))
+            seaborn.heatmap(mat, cmap='Blues', annot=True, fmt='.4g')
+            fig.savefig('confusion_matrix.svg', bbox_inches='tight', dpi=100, square=True)
             plt.close(fig)
             # create report
             with open('report.txt', 'w')as fp:
@@ -160,14 +167,6 @@ def tsne_visualization(model=None, test_graph=None):
         fig.savefig(file, bbox_inches='tight')
         plt.close(fig)
 
-    logits = test_graph.nodes['conn'].data['feat']
-    labels = test_graph.nodes['conn'].data['label']
-    scatter_drawer(logits, labels, 'emb_input.svg')
-
     logits = model(test_graph.nodes['conn'].data['feat'], hidden_only=True)
     labels = test_graph.nodes['conn'].data['label']
     scatter_drawer(logits, labels, 'emb_hidden.svg')
-
-    logits = model(test_graph.nodes['conn'].data['feat'], hidden_only=False)
-    labels = test_graph.nodes['conn'].data['label']
-    scatter_drawer(logits, labels, 'emb_output.svg')

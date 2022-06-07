@@ -17,7 +17,7 @@ sum_list = [
     # '07-05-heartbleed.json',
     '07-06-webattack_bruteforce.json',
     # '07-06-webattack_sql.json',
-    # '07-06-webattack_xss.json',
+    '07-06-webattack_xss.json',
     # '07-06-infiltration.json',
     '07-07-botnet.json',
     '07-07-portscan.json',
@@ -86,7 +86,7 @@ def dataset_initialize(sum_dir: str = './Data/Summary/Labelled', sum_list: list 
 
 
 cicids2017 = {
-    0: 0.04, 3: 0.1, 6: 0.08, 7: 0.1
+    0: 0.06, 5: 0.08, 9: 0.1, 10: 0.16
 }
 
 
@@ -152,8 +152,6 @@ def build_relation_graph(raw_data: str):
     rel_latest, rel_edges, count = dict(), dict(), 0
     conn_feat, conn_label = list(), list()
 
-    for rel in ['conn_sdp', 'auth_http', 'auth_ftp', 'auth_ssh', 'state_normal', 'state_abnormal']:
-        rel_latest[rel] = dict()
     for rel in ['conn', 'auth', 'state']:
         rel_edges[rel] = [[], []]
 
@@ -162,33 +160,26 @@ def build_relation_graph(raw_data: str):
         conn = item['conn']
         sip, dip, dport = conn['id.orig_h'], conn['id.resp_h'], conn['id.resp_p']
         # conn - conn_sdp
-        if sip in rel_latest['conn_sdp'] and dip in rel_latest['conn_sdp'][sip] and dport in rel_latest['conn_sdp'][sip][dip]:
-            latest_count = rel_latest['conn_sdp'][sip][dip][dport]
+        key = sip + '_' + dip + '_' + str(dport)
+        if key in rel_latest:
+            latest_count = rel_latest[key]
             rel_edges['conn'][0] += [latest_count, count]
             rel_edges['conn'][1] += [count, latest_count]
-        if sip not in rel_latest['conn_sdp']:
-            rel_latest['conn_sdp'][sip] = dict()
-        if dip not in rel_latest['conn_sdp'][sip]:
-            rel_latest['conn_sdp'][sip][dip] = dict()
-        rel_latest['conn_sdp'][sip][dip][dport] = count
+        rel_latest[key] = count
         # auth - auth_ftp
-        if sip in rel_latest['auth_ftp'] and dip in rel_latest['auth_ftp'][sip]:
-            if conn['service'] == 1 and 'ftp' not in item:
-                latest_count = rel_latest['auth_ftp'][sip][dip]
-                rel_edges['auth'][0] += [latest_count, count]
-                rel_edges['auth'][1] += [count, latest_count]
-        if sip not in rel_latest['auth_ftp']:
-            rel_latest['auth_ftp'][sip] = dict()
-        rel_latest['auth_ftp'][sip][dip] = count
+        key = sip + '_' + dip + '_' + 'auth_ftp'
+        if key in rel_latest and conn['service'] == 1 and 'ftp' not in item:
+            latest_count = rel_latest[key]
+            rel_edges['auth'][0] += [latest_count, count]
+            rel_edges['auth'][1] += [count, latest_count]
+        rel_latest[key] = count
         # auth - auth_ssh
-        if sip in rel_latest['auth_ssh'] and dip in rel_latest['auth_ssh'][sip]:
-            if conn['service'] == 6 and 'ssh' in item and item['ssh']['auth_success'] == False:
-                latest_count = rel_latest['auth_ssh'][sip][dip]
-                rel_edges['auth'][0] += [latest_count, count]
-                rel_edges['auth'][1] += [count, latest_count]
-        if sip not in rel_latest['auth_ssh']:
-            rel_latest['auth_ssh'][sip] = dict()
-        rel_latest['auth_ssh'][sip][dip] = count
+        key = sip + '_' + dip + '_' + 'auth_ssh'
+        if key in rel_latest and conn['service'] == 6 and 'ssh' in item and item['ssh']['auth_success'] == False:
+            latest_count = rel_latest[key]
+            rel_edges['auth'][0] += [latest_count, count]
+            rel_edges['auth'][1] += [count, latest_count]
+        rel_latest[key] = count
         # auth - auth_http
 
         def check_login(domain, url):
@@ -196,39 +187,28 @@ def build_relation_graph(raw_data: str):
             for word in word_list:
                 if word in domain or word in url:
                     return True
-        if sip in rel_latest['auth_http'] and dip in rel_latest['auth_http'][sip]:
-            if conn['service'] == 2 and 'http' in item and check_login(item['http']['host'], item['http']['uri']):
-                latest_count = rel_latest['auth_http'][sip][dip]
-                rel_edges['auth'][0] += [latest_count, count]
-                rel_edges['auth'][1] += [count, latest_count]
-        if sip not in rel_latest['auth_http']:
-            rel_latest['auth_http'][sip] = dict()
-        rel_latest['auth_http'][sip][dip] = count
-        # state - state_normal
-        if sip in rel_latest['state_normal'] and dip in rel_latest['state_normal'][sip]:
-            if conn['conn_state'] == 2:
-                latest_count = rel_latest['state_normal'][sip][dip]
-                rel_edges['state'][0] += [latest_count, count]
-                rel_edges['state'][1] += [count, latest_count]
-        if sip not in rel_latest['state_normal']:
-            rel_latest['state_normal'][sip] = dict()
-        rel_latest['state_normal'][sip][dip] = count
-        # state - state_abnormal
-        if sip in rel_latest['state_abnormal'] and dip in rel_latest['state_abnormal'][sip]:
-            if conn['conn_state'] != 2:
-                latest_count = rel_latest['state_abnormal'][sip][dip]
-                rel_edges['state'][0] += [latest_count, count]
-                rel_edges['state'][1] += [count, latest_count]
-        if sip not in rel_latest['state_abnormal']:
-            rel_latest['state_abnormal'][sip] = dict()
-        rel_latest['state_abnormal'][sip][dip] = count
+        key = sip + '_' + dip + '_' + 'auth_http'
+        if key in rel_latest and conn['service'] == 2 and 'http' in item and check_login(item['http']['host'], item['http']['uri']):
+            latest_count = rel_latest[key]
+            rel_edges['auth'][0] += [latest_count, count]
+            rel_edges['auth'][1] += [count, latest_count]
+        rel_latest[key] = count
+        # state - state_?
+        key = sip + '_' + dip + '_' + 'state_' + str(conn['conn_state'])
+        if key in rel_latest:
+            latest_count = rel_latest[key]
+            rel_edges['state'][0] += [latest_count, count]
+            rel_edges['state'][1] += [count, latest_count]
+        rel_latest[key] = count
         # store features and labels
         # conn_feat.append(get_conn_feat(conn))
         conn_label.append(item['label'])
         count += 1
         print('\rLoading...', count, end='')
     graph = dgl.heterograph({('conn', rel, 'conn'): (torch.tensor(rel_edges[rel][0]), torch.tensor(rel_edges[rel][1])) for rel in rel_edges}, num_nodes_dict={'conn': count})
-    graph.nodes['conn'].data['feat'] = torch.tensor(build_conn_feat(raw_data), dtype=torch.float32)
+    graph.nodes['conn'].data['conn'] = torch.tensor(build_feat_conn(raw_data), dtype=torch.float32)
+    graph.nodes['conn'].data['auth'] = torch.tensor(build_feat_auth(raw_data), dtype=torch.float32)
+    graph.nodes['conn'].data['state'] = torch.tensor(build_feat_state(raw_data), dtype=torch.float32)
     graph.nodes['conn'].data['label'] = torch.tensor(conn_label, dtype=torch.long)
     fp.close()
     return graph.to('cuda:0')
@@ -241,13 +221,14 @@ def get_conn_feat(conn: dict):
     conn_state, history, proto, service = conn['conn_state'], conn['history'], conn['proto'], conn['service']
     orig_pkt_ps, resp_pkt_ps = orig_pkts / duration, resp_pkts / duration
     orig_bytes_ps, resp_bytes_ps = orig_bytes / duration, resp_bytes / duration
-    bytes_ratio, pkts_ratio = resp_bytes / orig_bytes if orig_bytes != 0 else -1, resp_pkts / orig_pkts
-    return [conn_state, proto, service, *history, duration, orig_bytes, resp_bytes, orig_pkts, resp_pkts, orig_bytes_ps, resp_bytes_ps, orig_pkt_ps, resp_pkt_ps, bytes_ratio, pkts_ratio]
+    bytes_ratio = resp_bytes / orig_bytes
+    orig_bytes_per_pkt, resp_bytes_per_pkt = orig_bytes / orig_pkts, resp_bytes / resp_pkts if resp_pkts != 0 else -1
+    return [conn_state, proto, service, *history, duration, orig_bytes, resp_bytes, orig_pkts, resp_pkts, orig_bytes_ps, resp_bytes_ps, orig_pkt_ps, resp_pkt_ps, bytes_ratio, orig_bytes_per_pkt, resp_bytes_per_pkt]
 
 
-def build_conn_feat(raw_data):
+def build_feat_conn(raw_data):
     fp = open(raw_data, 'r')
-    sdp_ts, sdp_bytes, sdp_pkts = dict(), dict(), dict()
+    ts_w, bytes_w, pkts_w = dict(), dict(), dict()
     index_list = list()
     conn_feats = list()
 
@@ -256,45 +237,167 @@ def build_conn_feat(raw_data):
         conn = item['conn']
         sip, dip, dport = conn['id.orig_h'], conn['id.resp_h'], conn['id.resp_p']
         feat = get_conn_feat(conn)
-        key = sip + dip + str(dport)
-        if key not in sdp_ts:
-            sdp_ts[key] = []
-        if key not in sdp_bytes:
-            sdp_bytes[key] = []
-        if key not in sdp_pkts:
-            sdp_pkts[key] = []
+        key = sip + '_' + dip + '_' + str(dport)
+        if key not in ts_w:
+            ts_w[key] = []
+        if key not in bytes_w:
+            bytes_w[key] = []
+        if key not in pkts_w:
+            pkts_w[key] = []
 
-        if len(sdp_ts[key]) > 0:
-            latest_ts = sdp_ts[key].pop()
-            sdp_ts[key].append(math.exp(-conn['ts'] + latest_ts))
-        sdp_ts[key].append(conn['ts'])
-        sdp_bytes[key].append([feat[-10], feat[-9], feat[-2]])
-        sdp_pkts[key].append([feat[-8], feat[-7], feat[-3]])
-        index_list.append((key, len(sdp_bytes[key]) - 1))
+        if len(ts_w[key]) > 0:
+            latest_ts = ts_w[key].pop()
+            ts_w[key].append(conn['ts'] - latest_ts)
+        ts_w[key].append(conn['ts'])
+        bytes_w[key].append([feat[-11], feat[-10]])
+        pkts_w[key].append([feat[-9], feat[-8]])
+        index_list.append((key, len(bytes_w[key]) - 1))
         conn_feats.append(feat)
 
-    for k in sdp_ts:
-        sdp_ts[k].pop()
+    for k in ts_w:
+        ts_w[k].pop()
 
     for (count, (key, index)) in enumerate(index_list):
-        start, end = index - 5 if index - 5 >= 0 else 0, index + 5 if index + 5 <= len(sdp_ts[key]) else len(sdp_ts[key])
-        if len(sdp_ts[key]) == 0:
-            conn_feats[count] += [0 for i in range(14)]
+        start, end = index - 5 if index - 5 >= 0 else 0, index + 5 if index + 5 <= len(ts_w[key]) else len(ts_w[key])
+        if len(ts_w[key]) == 0:
+            conn_feats[count] += [0 for i in range(10)]
         else:
-            ts_win = np.array(sdp_ts[key][start:end])
-            bytes_win = np.array(sdp_bytes[key][start:end])
-            pkts_win = np.array(sdp_pkts[key][start:end])
+            ts_win = np.array(ts_w[key][start:end])
+            bytes_win = np.array(bytes_w[key][start:end])
+            pkts_win = np.array(pkts_w[key][start:end])
 
-            orig_bytes_win, resp_bytes_win, bytes_ratio_win = bytes_win[:, 0], bytes_win[:, 1], bytes_win[:, 2]
-            orig_pkts_win, resp_pkts_win, pkts_ratio_win = pkts_win[:, 0], pkts_win[:, 1], pkts_win[:, 2]
+            orig_bytes_win, resp_bytes_win = bytes_win[:, 0], bytes_win[:, 1]
+            orig_pkts_win, resp_pkts_win = pkts_win[:, 0], pkts_win[:, 1]
 
             conn_feats[count] += [
-                ts_win.var(), ts_win.mean(),
+                ts_win.std(), ts_win.mean(),
                 orig_bytes_win.std(), orig_bytes_win.mean(),
                 resp_bytes_win.std(), resp_bytes_win.mean(),
                 orig_pkts_win.std(), orig_pkts_win.mean(),
                 resp_pkts_win.std(), resp_pkts_win.mean(),
-                bytes_ratio_win.std(), bytes_ratio_win.mean(),
-                pkts_ratio_win.std(), pkts_ratio_win.mean(),
             ]
+        # conn_feats[count] += [0 for i in range(10)]
+    return conn_feats
+
+
+def build_feat_auth(raw_data):
+    fp = open(raw_data, 'r')
+    ts_w, bytes_w, pkts_w = dict(), dict(), dict()
+    index_list = list()
+    conn_feats = list()
+
+    for line in fp:
+        item = json.loads(line)
+        conn = item['conn']
+        sip, dip, dport = conn['id.orig_h'], conn['id.resp_h'], conn['id.resp_p']
+        feat = get_conn_feat(conn)
+        key = None
+
+        def check_login(domain, url):
+            word_list = ['passport', 'login', 'signin']
+            for word in word_list:
+                if word in domain or word in url:
+                    return True
+
+        if conn['service'] == 1 and 'ftp' not in item:
+            key = sip + '_' + dip + '_' + 'auth_ftp'
+        elif conn['service'] == 6 and 'ssh' in item and item['ssh']['auth_success'] == False:
+            key = sip + '_' + dip + '_' + 'auth_ssh'
+        elif conn['service'] == 2 and 'http' in item and check_login(item['http']['host'], item['http']['uri']):
+            key = sip + '_' + dip + '_' + 'auth_http'
+        else:
+            key = 'drop'
+        if key not in ts_w:
+            ts_w[key] = []
+        if key not in bytes_w:
+            bytes_w[key] = []
+        if key not in pkts_w:
+            pkts_w[key] = []
+
+        if len(ts_w[key]) > 0:
+            latest_ts = ts_w[key].pop()
+            ts_w[key].append(conn['ts'] - latest_ts)
+        ts_w[key].append(conn['ts'])
+        bytes_w[key].append([feat[-11], feat[-10]])
+        pkts_w[key].append([feat[-9], feat[-8]])
+        index_list.append((key, len(bytes_w[key]) - 1))
+        conn_feats.append(feat)
+
+    for k in ts_w:
+        ts_w[k].pop()
+
+    for (count, (key, index)) in enumerate(index_list):
+        start, end = index - 5 if index - 5 >= 0 else 0, index + 5 if index + 5 <= len(ts_w[key]) else len(ts_w[key])
+        if len(ts_w[key]) == 0 or key == 'drop':
+            conn_feats[count] += [0 for i in range(10)]
+        else:
+            ts_win = np.array(ts_w[key][start:end])
+            bytes_win = np.array(bytes_w[key][start:end])
+            pkts_win = np.array(pkts_w[key][start:end])
+
+            orig_bytes_win, resp_bytes_win = bytes_win[:, 0], bytes_win[:, 1]
+            orig_pkts_win, resp_pkts_win = pkts_win[:, 0], pkts_win[:, 1]
+
+            conn_feats[count] += [
+                ts_win.std(), ts_win.mean(),
+                orig_bytes_win.std(), orig_bytes_win.mean(),
+                resp_bytes_win.std(), resp_bytes_win.mean(),
+                orig_pkts_win.std(), orig_pkts_win.mean(),
+                resp_pkts_win.std(), resp_pkts_win.mean(),
+            ]
+        # conn_feats[count] += [0 for i in range(10)]
+    return conn_feats
+
+
+def build_feat_state(raw_data):
+    fp = open(raw_data, 'r')
+    ts_w, bytes_w, pkts_w = dict(), dict(), dict()
+    index_list = list()
+    conn_feats = list()
+
+    for line in fp:
+        item = json.loads(line)
+        conn = item['conn']
+        sip, dip, dport = conn['id.orig_h'], conn['id.resp_h'], conn['id.resp_p']
+        feat = get_conn_feat(conn)
+        key = sip + '_' + dip + '_' + str(conn['conn_state'])
+        if key not in ts_w:
+            ts_w[key] = []
+        if key not in bytes_w:
+            bytes_w[key] = []
+        if key not in pkts_w:
+            pkts_w[key] = []
+
+        if len(ts_w[key]) > 0:
+            latest_ts = ts_w[key].pop()
+            ts_w[key].append(conn['ts'] - latest_ts)
+        ts_w[key].append(conn['ts'])
+        bytes_w[key].append([feat[-11], feat[-10]])
+        pkts_w[key].append([feat[-9], feat[-8]])
+        index_list.append((key, len(bytes_w[key]) - 1))
+        conn_feats.append(feat)
+
+    for k in ts_w:
+        ts_w[k].pop()
+
+    for (count, (key, index)) in enumerate(index_list):
+        start, end = index - 5 if index - 5 >= 0 else 0, index + 5 if index + 5 <= len(ts_w[key]) else len(ts_w[key])
+        if len(ts_w[key]) == 0:
+            conn_feats[count] += [0 for i in range(10)]
+        else:
+            ts_win = np.array(ts_w[key][start:end])
+            bytes_win = np.array(bytes_w[key][start:end])
+            pkts_win = np.array(pkts_w[key][start:end])
+
+            orig_bytes_win, resp_bytes_win = bytes_win[:, 0], bytes_win[:, 1]
+            orig_pkts_win, resp_pkts_win = pkts_win[:, 0], pkts_win[:, 1]
+
+            conn_feats[count] += [
+                ts_win.std(), ts_win.mean(),
+                orig_bytes_win.std(), orig_bytes_win.mean(),
+                resp_bytes_win.std(), resp_bytes_win.mean(),
+                orig_pkts_win.std(), orig_pkts_win.mean(),
+                resp_pkts_win.std(), resp_pkts_win.mean(),
+            ]
+        # conn_feats[count] += [0 for i in range(10)]
     return conn_feats

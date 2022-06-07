@@ -1,3 +1,4 @@
+import copy
 import csv
 import os
 import shutil
@@ -33,24 +34,27 @@ class M_GAT(torch.nn.Module):
         self.output_layer = torch.nn.ModuleDict({
             e: dglnn.GATConv(gnn_dims[-1] * num_heads, output_dim, num_heads=1, residual=False, activation=None, allow_zero_in_degree=True, attn_drop=attn_drop, feat_drop=feat_drop) for e in self.etypes
         })
+        self.linear = torch.nn.Linear(output_dim * len(self.etypes), output_dim)
 
     def forward(self, graph: dgl.DGLGraph, inputs):
         # TODO add_self_loop is necessary?
         self.subgraphs = {e: graph['conn', e, 'conn'] for e in self.etypes}
-        self.inputs = inputs.clone()
+        self.inputs = copy.deepcopy(inputs)
         # Embedding layers
-        conn_state_emb = self.emb_layers[0](self.inputs[:, 0].type(torch.int))
-        proto_emb = self.emb_layers[1](self.inputs[:, 1].type(torch.int))
-        service_emb = self.emb_layers[2](self.inputs[:, 2].type(torch.int))
-        self.inputs = torch.cat([conn_state_emb, proto_emb, service_emb, self.inputs[:, 3:]], dim=1)
+        for etype in self.etypes:
+            conn_state_emb = self.emb_layers[0](self.inputs[etype][:, 0].type(torch.int))
+            proto_emb = self.emb_layers[1](self.inputs[etype][:, 1].type(torch.int))
+            service_emb = self.emb_layers[2](self.inputs[etype][:, 2].type(torch.int))
+            self.inputs[etype] = torch.cat([conn_state_emb, proto_emb, service_emb, self.inputs[etype][:, 3:]], dim=1)
         # GNN layers
-        h = {e: self.inputs for e in self.etypes}
+        h = {e: self.inputs[e] for e in self.etypes}
         for gnn_layer in self.gnn_layers:
             h = {e: gnn_layer[e](self.subgraphs[e], h[e]).flatten(1) for e in self.etypes}
         h = {e: self.output_layer[e](self.subgraphs[e], h[e]).flatten(1) for e in self.etypes}
         # mean
-        h = torch.stack([h[e].flatten(1) for e in self.etypes], dim=1).mean(dim=1)
-        return h
+        # h = torch.stack([h[e].flatten(1) for e in self.etypes], dim=1).mean(dim=1)
+        h = torch.cat([h[e].flatten(1) for e in self.etypes], dim=1)
+        return self.linear(h)
 
 
 class M_GAT_orig(torch.nn.Module):
@@ -141,7 +145,7 @@ def train(model: torch.nn.Module, train_graph: dgl.DGLGraph, valid_graph: dgl.DG
         start = time.time()
         # backward propagation
 
-        logits = model(train_graph, train_graph.nodes['conn'].data['feat'])
+        logits = model(train_graph, train_graph.nodes['conn'].data)
         train_loss = F.cross_entropy(logits, train_graph.nodes['conn'].data['label'])
         # train_loss = FocalLoss(gamma=2)(logits, train_graph.nodes['conn'].data['label'])
         opt.zero_grad()
@@ -179,7 +183,7 @@ def train(model: torch.nn.Module, train_graph: dgl.DGLGraph, valid_graph: dgl.DG
 def evaluate(model: torch.nn.Module, valid_graph: dgl.DGLGraph, is_test=False):
     model.eval()
     with torch.no_grad():
-        logits = model(valid_graph, valid_graph.nodes['conn'].data['feat'])
+        logits = model(valid_graph, valid_graph.nodes['conn'].data)
         loss = F.cross_entropy(logits, valid_graph.nodes['conn'].data['label'])
         # loss = FocalLoss(gamma=2)(logits, valid_graph.nodes['conn'].data['label'])
         labels = valid_graph.nodes['conn'].data['label']
@@ -191,9 +195,10 @@ def evaluate(model: torch.nn.Module, valid_graph: dgl.DGLGraph, is_test=False):
             mat = confusion_matrix(labels, indices)
             # save cf_mat's csv and svg
             np.savetxt('confusion_matrix.csv', mat, delimiter='\t', fmt='%d')
-            mat = mat / mat.sum(axis=1).reshape(-1, 1) * 100
-            fig = plt.figure(figsize=(9, 7))
-            seaborn.heatmap(mat, cmap='Blues', annot=True, fmt='.2f')
+            mat = np.around(mat / mat.sum(axis=1).reshape(-1, 1), 4)
+            # mat = mat / mat.sum(axis=1).reshape(-1, 1)
+            fig = plt.figure(figsize=(11, 9))
+            seaborn.heatmap(mat, cmap='Blues', annot=True, fmt='.4g')
             fig.savefig('confusion_matrix.svg', bbox_inches='tight', dpi=100, square=True)
             plt.close(fig)
             # create report
@@ -241,18 +246,18 @@ def tsne_visualization(model=None, test_graph=None):
         labels = labels.cpu().detach().numpy()
 
         print('tsne processing...')
-        emb = TSNE(n_iter=280, num_neighbors=48, learning_rate=50).fit_transform(logits)
-        colors = np.array(['black', 'grey', 'red', 'orange', 'olive', 'green', 'lime', 'aqua', 'blue', 'fuchsia', 'purple'])
+        emb = TSNE(n_iter=660, num_neighbors=50, learning_rate=30, perplexity=320).fit_transform(logits)
+        colors = np.array(['black', 'grey', 'red', 'orange', 'olive', 'green', 'lime', 'aqua', 'blue', 'fuchsia', 'purple', 'aquamarine'])
         fig = plt.figure()
-        scatter = plt.scatter(emb[:, 0], emb[:, 1], c=colors[labels], s=2)
+        scatter = plt.scatter(emb[:, 0], emb[:, 1], c=colors[labels], s=2.5)
         # plt.legend(*scatter.legend_elements(), loc="lower left", title="Classes")
         fig.savefig(file, bbox_inches='tight')
         plt.close(fig)
 
-    logits = test_graph.nodes['conn'].data['feat']
-    labels = test_graph.nodes['conn'].data['label']
-    scatter_drawer(logits, labels, 'emb_input.svg')
+    # logits = test_graph.nodes['conn'].data['feat']
+    # labels = test_graph.nodes['conn'].data['label']
+    # scatter_drawer(logits, labels, 'emb_input.svg')
 
-    logits = model(test_graph, test_graph.nodes['conn'].data['feat'])
+    logits = model(test_graph, test_graph.nodes['conn'].data)
     labels = test_graph.nodes['conn'].data['label']
     scatter_drawer(logits, labels, 'emb_hidden.svg')

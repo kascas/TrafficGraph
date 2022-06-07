@@ -18,6 +18,7 @@ import sys
 # 8     botnet
 # 9     portscan
 # 10    ddos
+# 11    xss
 
 optlist, args = getopt.getopt(sys.argv[1:], 't:')
 label_type = 'int'
@@ -118,11 +119,11 @@ def cicids_2017_label(path='./Data/Summary'):
                     item['label'] = 10 if label_type == 'int' else 'ddos'
                 else:
                     item['label'] = 0 if label_type == 'int' else 'benign'
-            # elif conn['ts'] >= 1499346900 and conn['ts'] <= 1499348220:
-            #     if check_host(conn, '172.16.0.1', '192.168.10.50', 80):
-            #         item['label'] = 11 if label_type=='int' else 'webattack_xss'
-            #     else:
-            #         item['label'] = 0 if label_type=='int' else 'benign'
+            elif conn['ts'] >= 1499346900 and conn['ts'] <= 1499348220:
+                if check_host(conn, '172.16.0.1', '192.168.10.50', 80):
+                    item['label'] = 11 if label_type == 'int' else 'webattack_xss'
+                else:
+                    item['label'] = 0 if label_type == 'int' else 'benign'
             # elif conn['ts'] >= 1499348400 and conn['ts'] <= 1499348640:
             #     if check_host(conn, '172.16.0.1', '192.168.10.50', 80):
             #         item['label'] = 12 if label_type=='int' else 'webattack_sql'
